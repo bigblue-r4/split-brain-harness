@@ -1,14 +1,14 @@
-use crate::types::TelemetryResult;
 use anyhow::{anyhow, Result};
+use serde::de::DeserializeOwned;
 
-/// Pull the first valid TelemetryResult JSON object out of raw model output.
+/// Pull the first valid JSON object of type T out of raw model output.
 ///
 /// Handles (in order):
 ///   1. <think>...</think> blocks emitted by reasoning models
 ///   2. ```json ... ``` and ``` ... ``` markdown fences
 ///   3. Leading prose before the opening brace
 ///   4. Trailing text or a second JSON object after the first closes
-pub fn extract(raw: &str) -> Result<TelemetryResult> {
+pub fn extract<T: DeserializeOwned>(raw: &str) -> Result<T> {
     let step1 = strip_think_blocks(raw);
     let step2 = strip_fences(&step1);
 
@@ -20,9 +20,8 @@ pub fn extract(raw: &str) -> Result<TelemetryResult> {
     })?;
 
     // StreamDeserializer stops at the end of the first complete JSON value
-    // and ignores anything that follows — this is the Rust equivalent of
-    // json.JSONDecoder().raw_decode() from the Python prototype.
-    let mut stream = serde_json::Deserializer::from_str(from_brace).into_iter::<TelemetryResult>();
+    // and ignores anything that follows.
+    let mut stream = serde_json::Deserializer::from_str(from_brace).into_iter::<T>();
 
     stream
         .next()
@@ -61,12 +60,10 @@ fn strip_fences(s: &str) -> String {
     if !s.starts_with("```") {
         return s.to_string();
     }
-    // Drop the fence line (```json, ```, etc.) up to the first newline
     let after_open = match s.find('\n') {
         Some(nl) => &s[nl + 1..],
         None => return s.to_string(),
     };
-    // Use rfind so the closing ``` is always the last one in the block
     match after_open.rfind("```") {
         Some(close) => after_open[..close].trim().to_string(),
         None => after_open.trim().to_string(),
@@ -80,6 +77,7 @@ fn strip_fences(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::TelemetryResult;
 
     fn good_json() -> &'static str {
         r#"{
@@ -102,42 +100,41 @@ mod tests {
 
     #[test]
     fn parses_clean_json() {
-        extract(good_json()).expect("clean JSON should parse");
+        extract::<TelemetryResult>(good_json()).expect("clean JSON should parse");
     }
 
     #[test]
     fn strips_markdown_fence() {
         let fenced = format!("```json\n{}\n```", good_json());
-        extract(&fenced).expect("fenced JSON should parse");
+        extract::<TelemetryResult>(&fenced).expect("fenced JSON should parse");
     }
 
     #[test]
     fn strips_think_blocks() {
         let with_think = format!("<think>some reasoning here</think>\n{}", good_json());
-        extract(&with_think).expect("JSON after think block should parse");
+        extract::<TelemetryResult>(&with_think).expect("JSON after think block should parse");
     }
 
     #[test]
     fn ignores_trailing_text() {
         let trailing = format!("{}\n\nHere is my analysis.", good_json());
-        extract(&trailing).expect("trailing prose should be ignored");
+        extract::<TelemetryResult>(&trailing).expect("trailing prose should be ignored");
     }
 
     #[test]
     fn ignores_leading_prose() {
         let leading = format!("Sure! Here is the JSON:\n{}", good_json());
-        extract(&leading).expect("leading prose should be ignored");
+        extract::<TelemetryResult>(&leading).expect("leading prose should be ignored");
     }
 
     #[test]
     fn errors_on_empty() {
-        assert!(extract("").is_err());
-        assert!(extract("no braces here").is_err());
+        assert!(extract::<TelemetryResult>("").is_err());
+        assert!(extract::<TelemetryResult>("no braces here").is_err());
     }
 
     #[test]
     fn errors_on_schema_mismatch() {
-        // Valid JSON but wrong shape
-        assert!(extract(r#"{"foo": "bar"}"#).is_err());
+        assert!(extract::<TelemetryResult>(r#"{"foo": "bar"}"#).is_err());
     }
 }

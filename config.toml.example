@@ -21,3 +21,9 @@ model_name = "llama3.2:3b"
 
 # Path to a custom soul.md (empty = embedded default)
 # soul_path = "/path/to/soul.md"
+
+# Verification mode: "deterministic" | "llm" | "none"
+# deterministic — fast consistency checks only, no extra API call (default)
+# llm           — deterministic checks + second LLM call using VERIFIER_SYSTEM_PROMPT
+# none          — skip verification entirely
+verify_mode = "deterministic"

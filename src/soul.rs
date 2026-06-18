@@ -1,14 +1,14 @@
 use crate::types::Soul;
 use anyhow::{anyhow, Result};
 
-// Embedded default — binary works standalone with no soul.md on disk.
-// Custom path in config overrides this at runtime.
 const DEFAULT_SOUL: &str = include_str!("../soul.md");
 
 const OPEN_LOGIC: &str = "[LOGIC_SYSTEM_PROMPT]";
 const CLOSE_LOGIC: &str = "[/LOGIC_SYSTEM_PROMPT]";
 const OPEN_CREATIVE: &str = "[CREATIVE_SYSTEM_PROMPT]";
 const CLOSE_CREATIVE: &str = "[/CREATIVE_SYSTEM_PROMPT]";
+const OPEN_VERIFIER: &str = "[VERIFIER_SYSTEM_PROMPT]";
+const CLOSE_VERIFIER: &str = "[/VERIFIER_SYSTEM_PROMPT]";
 
 /// Load a Soul from disk (if path given) or fall back to the embedded default.
 pub fn load(path: Option<&str>) -> Result<Soul> {
@@ -25,6 +25,14 @@ pub fn wrap_payload(input: &str) -> String {
     format!("<payload>\n{}\n</payload>", input)
 }
 
+/// Wrap an original input + proposed analysis for the verifier prompt.
+pub fn wrap_verifier_payload(original_input: &str, proposed_analysis: &str) -> String {
+    format!(
+        "<original_input>\n{}\n</original_input>\n<proposed_analysis>\n{}\n</proposed_analysis>",
+        original_input, proposed_analysis
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Internal
 // ---------------------------------------------------------------------------
@@ -32,7 +40,8 @@ pub fn wrap_payload(input: &str) -> String {
 fn parse(raw: &str) -> Result<Soul> {
     Ok(Soul {
         logic_system_prompt: extract(raw, OPEN_LOGIC, CLOSE_LOGIC)?,
-        creative_system_prompt: extract(raw, OPEN_CREATIVE, CLOSE_CREATIVE).unwrap_or_default(), // creative section is optional
+        creative_system_prompt: extract(raw, OPEN_CREATIVE, CLOSE_CREATIVE).unwrap_or_default(),
+        verifier_system_prompt: extract(raw, OPEN_VERIFIER, CLOSE_VERIFIER).unwrap_or_default(),
     })
 }
 
@@ -69,6 +78,14 @@ mod tests {
             soul.logic_system_prompt.contains("telemetry engine"),
             "logic prompt should contain identity marker"
         );
+        assert!(
+            !soul.verifier_system_prompt.is_empty(),
+            "verifier prompt must not be empty"
+        );
+        assert!(
+            soul.verifier_system_prompt.contains("claim verifier"),
+            "verifier prompt should contain identity marker"
+        );
     }
 
     #[test]
@@ -77,6 +94,15 @@ mod tests {
         assert!(wrapped.contains("<payload>"));
         assert!(wrapped.contains("</payload>"));
         assert!(wrapped.contains("hello world"));
+    }
+
+    #[test]
+    fn wrap_verifier_payload_contains_both_sections() {
+        let wrapped = wrap_verifier_payload("raw input", r#"{"foo":"bar"}"#);
+        assert!(wrapped.contains("<original_input>"));
+        assert!(wrapped.contains("raw input"));
+        assert!(wrapped.contains("<proposed_analysis>"));
+        assert!(wrapped.contains(r#"{"foo":"bar"}"#));
     }
 
     #[test]

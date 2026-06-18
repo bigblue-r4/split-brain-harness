@@ -2,40 +2,63 @@ use anyhow::{anyhow, Result};
 use serde::Deserialize;
 use split_brain_harness::{
     analyze,
-    types::{BackendType, Config},
+    types::{BackendType, Config, HarnessResult, VerifyMode},
 };
 use std::io::Read;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
-
-    // Parse minimal CLI: [--raw] [input text | --stdin]
-    let (raw_output, input) = parse_args(&args)?;
+    let (raw_output, show_trace, input) = parse_args(&args)?;
 
     let config = build_config();
-
     let result = analyze(&input, &config).await?;
 
-    if raw_output {
-        println!("{}", serde_json::to_string(&result)?);
-    } else {
-        println!("{}", serde_json::to_string_pretty(&result)?);
+    if result.verification.stop_and_ask {
+        eprintln!(
+            "WARNING: stop_and_ask=true (confidence={:.2}) — result may be unreliable. \
+             Provide more context or review manually.",
+            result.verification.confidence
+        );
     }
 
+    print_result(&result, raw_output, show_trace)?;
     Ok(())
 }
 
-fn parse_args(args: &[String]) -> Result<(bool, String)> {
+fn print_result(result: &HarnessResult, raw: bool, show_trace: bool) -> Result<()> {
+    let output = if show_trace {
+        if raw {
+            serde_json::to_string(result)?
+        } else {
+            serde_json::to_string_pretty(result)?
+        }
+    } else {
+        // Default: telemetry + verification only, no trace
+        let slim = serde_json::json!({
+            "telemetry":    result.telemetry,
+            "verification": result.verification,
+        });
+        if raw {
+            serde_json::to_string(&slim)?
+        } else {
+            serde_json::to_string_pretty(&slim)?
+        }
+    };
+    println!("{output}");
+    Ok(())
+}
+
+fn parse_args(args: &[String]) -> Result<(bool, bool, String)> {
     let raw = args.contains(&"--raw".to_string());
+    let show_trace = args.contains(&"--trace".to_string());
 
     if args.contains(&"--stdin".to_string()) {
         let mut input = String::new();
         std::io::stdin().read_to_string(&mut input)?;
-        return Ok((raw, input.trim().to_string()));
+        return Ok((raw, show_trace, input.trim().to_string()));
     }
 
-    // Collect positional args (anything not starting with --)
     let positional: Vec<&str> = args[1..]
         .iter()
         .filter(|a| !a.starts_with("--"))
@@ -44,20 +67,18 @@ fn parse_args(args: &[String]) -> Result<(bool, String)> {
 
     if positional.is_empty() {
         return Err(anyhow!(
-            "Usage: split-brain-harness [--raw] \"input text\"\n\
-             Usage: echo \"input\" | split-brain-harness --stdin [--raw]"
+            "Usage: split-brain-harness [--raw] [--trace] \"input text\"\n\
+             Usage: echo \"input\" | split-brain-harness --stdin [--raw] [--trace]"
         ));
     }
 
-    Ok((raw, positional.join(" ")))
+    Ok((raw, show_trace, positional.join(" ")))
 }
 
 // ---------------------------------------------------------------------------
 // Config loading — priority: env vars > config.toml > hardcoded defaults
 // ---------------------------------------------------------------------------
 
-/// Partial config loaded from a toml file. All fields optional so a sparse
-/// file is valid — missing keys fall through to env vars or defaults.
 #[derive(Deserialize, Default)]
 struct FileConfig {
     backend: Option<String>,
@@ -65,10 +86,9 @@ struct FileConfig {
     model_name: Option<String>,
     soul_path: Option<String>,
     api_key: Option<String>,
+    verify_mode: Option<String>,
 }
 
-/// Load a FileConfig from disk. Path: SBH_CONFIG env var → ./config.toml.
-/// Silently returns an empty FileConfig if the file is absent.
 fn load_file_config() -> FileConfig {
     let path = std::env::var("SBH_CONFIG").unwrap_or_else(|_| "config.toml".to_string());
     match std::fs::read_to_string(&path) {
@@ -86,10 +106,17 @@ fn parse_backend(s: &str) -> (BackendType, &'static str) {
     }
 }
 
+fn parse_verify_mode(s: &str) -> VerifyMode {
+    match s {
+        "llm" => VerifyMode::Llm,
+        "none" => VerifyMode::None,
+        _ => VerifyMode::Deterministic,
+    }
+}
+
 fn build_config() -> Config {
     let file = load_file_config();
 
-    // Env var wins; file config is the fallback; hardcoded default is last resort.
     let backend_str = std::env::var("SBH_BACKEND")
         .ok()
         .or(file.backend)
@@ -101,6 +128,12 @@ fn build_config() -> Config {
         BackendType::Anthropic => "claude-sonnet-4-6",
         _ => "llama3.2:3b",
     };
+
+    let verify_mode = std::env::var("SBH_VERIFY")
+        .ok()
+        .or(file.verify_mode)
+        .map(|s| parse_verify_mode(&s))
+        .unwrap_or_default();
 
     Config {
         backend,
@@ -117,5 +150,6 @@ fn build_config() -> Config {
             .or(file.soul_path)
             .unwrap_or_default(),
         api_key: std::env::var("SBH_API_KEY").ok().or(file.api_key),
+        verify_mode,
     }
 }

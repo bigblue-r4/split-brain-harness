@@ -1,32 +1,76 @@
 use crate::backends::InferenceEngine;
 use crate::extractor;
 use crate::soul;
-use crate::types::{LogicReport, RawInput, Soul, TelemetryResult};
+use crate::types::{
+    Config, HarnessResult, LogicReport, RawInput, Soul, TelemetryResult, TraceEntry,
+};
+use crate::verifier;
 use anyhow::{anyhow, Result};
 
-/// Core pipeline. Stateless — one instance per analysis call is fine,
-/// or hold one Harness and call analyze() repeatedly.
 pub struct Harness<'e> {
     soul: Soul,
     engine: &'e dyn InferenceEngine,
+    config: &'e Config,
 }
 
 impl<'e> Harness<'e> {
-    pub fn new(soul: Soul, engine: &'e dyn InferenceEngine) -> Self {
-        Self { soul, engine }
+    pub fn new(soul: Soul, engine: &'e dyn InferenceEngine, config: &'e Config) -> Self {
+        Self {
+            soul,
+            engine,
+            config,
+        }
     }
 
-    /// Run the full pipeline for a single raw input string.
-    /// Returns a fully validated TelemetryResult or a descriptive error.
-    pub async fn analyze(&self, input: &str) -> Result<TelemetryResult> {
-        let raw = self.run_logic_node(RawInput(input.to_string())).await?;
-        let result = self.extract_result(raw)?;
-        Ok(result)
+    /// Two-stage pipeline:
+    /// 1. Propose — logic node produces TelemetryResult
+    /// 2. Verify  — deterministic checks ± optional LLM verifier pass
+    pub async fn analyze(&self, input: &str) -> Result<HarnessResult> {
+        let mut trace: Vec<TraceEntry> = vec![];
+
+        let (telemetry, propose_entry) = self.run_propose(input).await?;
+        trace.push(propose_entry);
+
+        let (verification, verify_traces) = verifier::verify(
+            input,
+            &telemetry,
+            &self.soul,
+            self.engine,
+            &self.config.verify_mode,
+        )
+        .await;
+        trace.extend(verify_traces);
+
+        Ok(HarnessResult {
+            telemetry,
+            verification,
+            trace,
+        })
     }
 
     // -----------------------------------------------------------------------
-    // Pipeline stages — named to match the state transition types in types.rs
+    // Stage 1 — propose
     // -----------------------------------------------------------------------
+
+    async fn run_propose(&self, input: &str) -> Result<(TelemetryResult, TraceEntry)> {
+        let report = self.run_logic_node(RawInput(input.to_string())).await?;
+        let telemetry: TelemetryResult = extractor::extract(&report.analytical_matrix)?;
+
+        let entry = TraceEntry {
+            stage: "propose".into(),
+            claim: format!(
+                "manipulation_risk={} emotion={} intensity={:.2}",
+                telemetry.intent_matrix.manipulation_risk,
+                telemetry.affective_telemetry.primary_emotion,
+                telemetry.affective_telemetry.emotional_intensity,
+            ),
+            evidence: Some(truncate(input, 120)),
+            passed: true,
+            note: None,
+        };
+
+        Ok((telemetry, entry))
+    }
 
     async fn run_logic_node(&self, input: RawInput) -> Result<LogicReport> {
         let payload = soul::wrap_payload(&input.0);
@@ -45,8 +89,12 @@ impl<'e> Harness<'e> {
             analytical_matrix: raw_response,
         })
     }
+}
 
-    fn extract_result(&self, report: LogicReport) -> Result<TelemetryResult> {
-        extractor::extract(&report.analytical_matrix)
+fn truncate(s: &str, max: usize) -> String {
+    if s.len() <= max {
+        s.to_string()
+    } else {
+        format!("{}…", &s[..max])
     }
 }
