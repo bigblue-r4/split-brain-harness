@@ -1,11 +1,11 @@
+use crate::types::{BackendType, Config};
 use async_trait::async_trait;
 use reqwest::Client;
-use crate::types::{BackendType, Config};
 
-pub mod openai;
-pub mod ollama;
-pub mod embedded;
 pub mod anthropic;
+pub mod embedded;
+pub mod ollama;
+pub mod openai;
 
 #[async_trait]
 pub trait InferenceEngine: Send + Sync {
@@ -21,21 +21,21 @@ pub fn init_engine(config: &Config) -> Box<dyn InferenceEngine> {
     match config.backend {
         BackendType::OpenAiCompat => Box::new(openai::OpenAiEngine {
             endpoint: config.endpoint.clone(),
-            model:    config.model_name.clone(),
+            model: config.model_name.clone(),
             client,
         }),
         BackendType::OllamaNative => Box::new(ollama::OllamaNativeEngine {
             endpoint: config.endpoint.clone(),
-            model:    config.model_name.clone(),
+            model: config.model_name.clone(),
             client,
         }),
         BackendType::LocalEmbedded => Box::new(embedded::LocalEmbeddedEngine {
             model_identifier: config.model_name.clone(),
         }),
         BackendType::Anthropic => Box::new(anthropic::AnthropicEngine {
-            endpoint:  config.endpoint.clone(),
-            model:     config.model_name.clone(),
-            api_key:   config.api_key.clone().unwrap_or_default(),
+            endpoint: config.endpoint.clone(),
+            model: config.model_name.clone(),
+            api_key: config.api_key.clone().unwrap_or_default(),
             client,
         }),
     }

@@ -1,13 +1,13 @@
-use anyhow::{anyhow, Result};
 use crate::backends::InferenceEngine;
 use crate::extractor;
 use crate::soul;
-use crate::types::{RawInput, LogicReport, TelemetryResult, Soul};
+use crate::types::{LogicReport, RawInput, Soul, TelemetryResult};
+use anyhow::{anyhow, Result};
 
 /// Core pipeline. Stateless — one instance per analysis call is fine,
 /// or hold one Harness and call analyze() repeatedly.
 pub struct Harness<'e> {
-    soul:   Soul,
+    soul: Soul,
     engine: &'e dyn InferenceEngine,
 }
 
@@ -19,7 +19,7 @@ impl<'e> Harness<'e> {
     /// Run the full pipeline for a single raw input string.
     /// Returns a fully validated TelemetryResult or a descriptive error.
     pub async fn analyze(&self, input: &str) -> Result<TelemetryResult> {
-        let raw    = self.run_logic_node(RawInput(input.to_string())).await?;
+        let raw = self.run_logic_node(RawInput(input.to_string())).await?;
         let result = self.extract_result(raw)?;
         Ok(result)
     }
@@ -31,7 +31,8 @@ impl<'e> Harness<'e> {
     async fn run_logic_node(&self, input: RawInput) -> Result<LogicReport> {
         let payload = soul::wrap_payload(&input.0);
 
-        let raw_response = self.engine
+        let raw_response = self
+            .engine
             .generate(&self.soul.logic_system_prompt, &payload)
             .await
             .map_err(|e| anyhow!("inference backend error: {}", e))?;
@@ -40,7 +41,9 @@ impl<'e> Harness<'e> {
             return Err(anyhow!("model returned an empty response"));
         }
 
-        Ok(LogicReport { analytical_matrix: raw_response })
+        Ok(LogicReport {
+            analytical_matrix: raw_response,
+        })
     }
 
     fn extract_result(&self, report: LogicReport) -> Result<TelemetryResult> {

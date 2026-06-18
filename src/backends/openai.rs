@@ -1,12 +1,12 @@
+use super::InferenceEngine;
 use async_trait::async_trait;
 use reqwest::Client;
 use serde_json::json;
-use super::InferenceEngine;
 
 pub struct OpenAiEngine {
     pub endpoint: String,
-    pub model:    String,
-    pub client:   Client,
+    pub model: String,
+    pub client: Client,
 }
 
 #[async_trait]
@@ -22,8 +22,12 @@ impl InferenceEngine for OpenAiEngine {
             "max_tokens":  600
         });
 
-        let resp = self.client
-            .post(format!("{}/chat/completions", self.endpoint.trim_end_matches('/')))
+        let resp = self
+            .client
+            .post(format!(
+                "{}/chat/completions",
+                self.endpoint.trim_end_matches('/')
+            ))
             .json(&body)
             .send()
             .await

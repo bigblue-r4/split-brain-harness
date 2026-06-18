@@ -1,5 +1,8 @@
 use anyhow::{anyhow, Result};
-use split_brain_harness::{analyze, types::{BackendType, Config}};
+use split_brain_harness::{
+    analyze,
+    types::{BackendType, Config},
+};
 use std::io::Read;
 
 #[tokio::main]
@@ -51,29 +54,25 @@ fn parse_args(args: &[String]) -> Result<(bool, String)> {
 /// Build Config from environment variables with sensible defaults.
 /// In a real deployment this would read a config.toml instead.
 fn config_from_env() -> Config {
-    let backend_str = std::env::var("SBH_BACKEND")
-        .unwrap_or_else(|_| "ollama-native".to_string());
+    let backend_str = std::env::var("SBH_BACKEND").unwrap_or_else(|_| "ollama-native".to_string());
 
     let (backend, default_endpoint) = match backend_str.as_str() {
-        "openai-compat"  => (BackendType::OpenAiCompat,  "http://localhost:8080"),
-        "anthropic"      => (BackendType::Anthropic,     "https://api.anthropic.com"),
+        "openai-compat" => (BackendType::OpenAiCompat, "http://localhost:8080"),
+        "anthropic" => (BackendType::Anthropic, "https://api.anthropic.com"),
         "local-embedded" => (BackendType::LocalEmbedded, ""),
-        _                => (BackendType::OllamaNative,  "http://localhost:11434"),
+        _ => (BackendType::OllamaNative, "http://localhost:11434"),
     };
 
     let default_model = match &backend {
         BackendType::Anthropic => "claude-sonnet-4-6",
-        _                      => "llama3.2:3b",
+        _ => "llama3.2:3b",
     };
 
     Config {
         backend,
-        endpoint:   std::env::var("SBH_ENDPOINT")
-            .unwrap_or_else(|_| default_endpoint.to_string()),
-        model_name: std::env::var("SBH_MODEL")
-            .unwrap_or_else(|_| default_model.to_string()),
-        soul_path:  std::env::var("SBH_SOUL_PATH")
-            .unwrap_or_default(),
-        api_key:    std::env::var("SBH_API_KEY").ok(),
+        endpoint: std::env::var("SBH_ENDPOINT").unwrap_or_else(|_| default_endpoint.to_string()),
+        model_name: std::env::var("SBH_MODEL").unwrap_or_else(|_| default_model.to_string()),
+        soul_path: std::env::var("SBH_SOUL_PATH").unwrap_or_default(),
+        api_key: std::env::var("SBH_API_KEY").ok(),
     }
 }

@@ -1,12 +1,12 @@
+use super::InferenceEngine;
 use async_trait::async_trait;
 use reqwest::Client;
 use serde_json::json;
-use super::InferenceEngine;
 
 pub struct OllamaNativeEngine {
     pub endpoint: String,
-    pub model:    String,
-    pub client:   Client,
+    pub model: String,
+    pub client: Client,
 }
 
 #[async_trait]
@@ -23,7 +23,8 @@ impl InferenceEngine for OllamaNativeEngine {
             "options": { "temperature": 0.1, "num_predict": 600 }
         });
 
-        let resp = self.client
+        let resp = self
+            .client
             .post(format!("{}/api/chat", self.endpoint.trim_end_matches('/')))
             .json(&body)
             .send()

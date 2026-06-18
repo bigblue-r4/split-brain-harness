@@ -1,13 +1,13 @@
+use super::InferenceEngine;
 use async_trait::async_trait;
 use reqwest::Client;
 use serde_json::json;
-use super::InferenceEngine;
 
 pub struct AnthropicEngine {
-    pub endpoint:  String,
-    pub model:     String,
-    pub api_key:   String,
-    pub client:    Client,
+    pub endpoint: String,
+    pub model: String,
+    pub api_key: String,
+    pub client: Client,
 }
 
 #[async_trait]
@@ -26,8 +26,12 @@ impl InferenceEngine for AnthropicEngine {
             ]
         });
 
-        let resp = self.client
-            .post(format!("{}/v1/messages", self.endpoint.trim_end_matches('/')))
+        let resp = self
+            .client
+            .post(format!(
+                "{}/v1/messages",
+                self.endpoint.trim_end_matches('/')
+            ))
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", "2023-06-01")
             .header("content-type", "application/json")
@@ -40,9 +44,7 @@ impl InferenceEngine for AnthropicEngine {
         let json: serde_json::Value = resp.json().await.map_err(|e| e.to_string())?;
 
         if !status.is_success() {
-            let msg = json["error"]["message"]
-                .as_str()
-                .unwrap_or("unknown error");
+            let msg = json["error"]["message"].as_str().unwrap_or("unknown error");
             return Err(format!("Anthropic API error {status}: {msg}"));
         }
 

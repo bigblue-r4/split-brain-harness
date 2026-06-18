@@ -22,11 +22,11 @@ pub enum BackendType {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct Config {
-    pub backend:    BackendType,
-    pub endpoint:   String,
+    pub backend: BackendType,
+    pub endpoint: String,
     pub model_name: String,
-    pub soul_path:  String,
-    pub api_key:    Option<String>,
+    pub soul_path: String,
+    pub api_key: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -35,8 +35,8 @@ pub struct Config {
 
 #[derive(Debug, Clone)]
 pub struct Soul {
-    pub logic_system_prompt:    String,  // analytical / left-hemisphere stance
-    pub creative_system_prompt: String,  // affective / right-hemisphere stance
+    pub logic_system_prompt: String, // analytical / left-hemisphere stance
+    pub creative_system_prompt: String, // affective / right-hemisphere stance
 }
 
 // ---------------------------------------------------------------------------
@@ -46,11 +46,11 @@ pub struct Soul {
 pub struct RawInput(pub String);
 
 pub struct LogicReport {
-    pub analytical_matrix: String,   // raw JSON string from the logic node
+    pub analytical_matrix: String, // raw JSON string from the logic node
 }
 
 pub struct CreativeOutput {
-    pub raw_response: String,        // raw text from the creative node
+    pub raw_response: String, // raw text from the creative node
 }
 
 pub struct VerifiedResponse(pub String);
@@ -61,27 +61,27 @@ pub struct VerifiedResponse(pub String);
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AfferentTelemetry {
-    pub primary_emotion:   String,
+    pub primary_emotion: String,
     pub emotional_intensity: f32,
-    pub structural_tone:   Vec<String>,
+    pub structural_tone: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct IntentMatrix {
-    pub stated_objective:   String,
-    pub subtextual_motive:  String,
-    pub manipulation_risk:  String,
+    pub stated_objective: String,
+    pub subtextual_motive: String,
+    pub manipulation_risk: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct CognitiveState {
-    pub urgency_vector:   f32,
+    pub urgency_vector: f32,
     pub coherence_rating: f32,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct TelemetryResult {
     pub affective_telemetry: AfferentTelemetry,
-    pub intent_matrix:       IntentMatrix,
-    pub cognitive_state:     CognitiveState,
+    pub intent_matrix: IntentMatrix,
+    pub cognitive_state: CognitiveState,
 }

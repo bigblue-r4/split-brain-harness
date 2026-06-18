@@ -1,5 +1,5 @@
-use anyhow::{anyhow, Result};
 use crate::types::TelemetryResult;
+use anyhow::{anyhow, Result};
 
 /// Pull the first valid TelemetryResult JSON object out of raw model output.
 ///
@@ -12,28 +12,28 @@ pub fn extract(raw: &str) -> Result<TelemetryResult> {
     let step1 = strip_think_blocks(raw);
     let step2 = strip_fences(&step1);
 
-    let from_brace = step2
-        .find('{')
-        .map(|i| &step2[i..])
-        .ok_or_else(|| anyhow!(
+    let from_brace = step2.find('{').map(|i| &step2[i..]).ok_or_else(|| {
+        anyhow!(
             "no JSON object in model response. First 200 chars: {:?}",
             &raw[..raw.len().min(200)]
-        ))?;
+        )
+    })?;
 
     // StreamDeserializer stops at the end of the first complete JSON value
     // and ignores anything that follows — this is the Rust equivalent of
     // json.JSONDecoder().raw_decode() from the Python prototype.
-    let mut stream = serde_json::Deserializer::from_str(from_brace)
-        .into_iter::<TelemetryResult>();
+    let mut stream = serde_json::Deserializer::from_str(from_brace).into_iter::<TelemetryResult>();
 
     stream
         .next()
         .ok_or_else(|| anyhow!("model returned an empty response"))?
-        .map_err(|e| anyhow!(
-            "JSON schema mismatch: {}. Raw snippet: {:?}",
-            e,
-            &from_brace[..from_brace.len().min(300)]
-        ))
+        .map_err(|e| {
+            anyhow!(
+                "JSON schema mismatch: {}. Raw snippet: {:?}",
+                e,
+                &from_brace[..from_brace.len().min(300)]
+            )
+        })
 }
 
 // ---------------------------------------------------------------------------
@@ -42,13 +42,13 @@ pub fn extract(raw: &str) -> Result<TelemetryResult> {
 
 /// Remove all <think>...</think> blocks. Unclosed tags drop the remainder.
 fn strip_think_blocks(s: &str) -> String {
-    let mut out  = String::with_capacity(s.len());
+    let mut out = String::with_capacity(s.len());
     let mut rest = s;
     while let Some(open) = rest.find("<think>") {
         out.push_str(&rest[..open]);
         match rest[open..].find("</think>") {
             Some(close) => rest = &rest[open + close + "</think>".len()..],
-            None        => return out,
+            None => return out,
         }
     }
     out.push_str(rest);
@@ -64,12 +64,12 @@ fn strip_fences(s: &str) -> String {
     // Drop the fence line (```json, ```, etc.) up to the first newline
     let after_open = match s.find('\n') {
         Some(nl) => &s[nl + 1..],
-        None     => return s.to_string(),
+        None => return s.to_string(),
     };
     // Use rfind so the closing ``` is always the last one in the block
     match after_open.rfind("```") {
         Some(close) => after_open[..close].trim().to_string(),
-        None        => after_open.trim().to_string(),
+        None => after_open.trim().to_string(),
     }
 }
 

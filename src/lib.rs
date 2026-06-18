@@ -1,8 +1,8 @@
-pub mod types;
 pub mod backends;
-pub mod soul;
 pub mod extractor;
 pub mod harness;
+pub mod soul;
+pub mod types;
 
 use anyhow::Result;
 use types::{Config, TelemetryResult};
@@ -11,7 +11,7 @@ use types::{Config, TelemetryResult};
 /// runs the full pipeline, returns a TelemetryResult.
 pub async fn analyze(input: &str, config: &Config) -> Result<TelemetryResult> {
     let loaded_soul = soul::load(Some(&config.soul_path))?;
-    let engine      = backends::init_engine(config);
-    let h           = harness::Harness::new(loaded_soul, engine.as_ref());
+    let engine = backends::init_engine(config);
+    let h = harness::Harness::new(loaded_soul, engine.as_ref());
     h.analyze(input).await
 }

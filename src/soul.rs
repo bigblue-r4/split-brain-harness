@@ -1,14 +1,14 @@
-use anyhow::{anyhow, Result};
 use crate::types::Soul;
+use anyhow::{anyhow, Result};
 
 // Embedded default — binary works standalone with no soul.md on disk.
 // Custom path in config overrides this at runtime.
 const DEFAULT_SOUL: &str = include_str!("../soul.md");
 
-const OPEN_LOGIC:    &str = "[LOGIC_SYSTEM_PROMPT]";
-const CLOSE_LOGIC:   &str = "[/LOGIC_SYSTEM_PROMPT]";
+const OPEN_LOGIC: &str = "[LOGIC_SYSTEM_PROMPT]";
+const CLOSE_LOGIC: &str = "[/LOGIC_SYSTEM_PROMPT]";
 const OPEN_CREATIVE: &str = "[CREATIVE_SYSTEM_PROMPT]";
-const CLOSE_CREATIVE:&str = "[/CREATIVE_SYSTEM_PROMPT]";
+const CLOSE_CREATIVE: &str = "[/CREATIVE_SYSTEM_PROMPT]";
 
 /// Load a Soul from disk (if path given) or fall back to the embedded default.
 pub fn load(path: Option<&str>) -> Result<Soul> {
@@ -31,14 +31,14 @@ pub fn wrap_payload(input: &str) -> String {
 
 fn parse(raw: &str) -> Result<Soul> {
     Ok(Soul {
-        logic_system_prompt:    extract(raw, OPEN_LOGIC,    CLOSE_LOGIC)?,
-        creative_system_prompt: extract(raw, OPEN_CREATIVE, CLOSE_CREATIVE)
-            .unwrap_or_default(),  // creative section is optional
+        logic_system_prompt: extract(raw, OPEN_LOGIC, CLOSE_LOGIC)?,
+        creative_system_prompt: extract(raw, OPEN_CREATIVE, CLOSE_CREATIVE).unwrap_or_default(), // creative section is optional
     })
 }
 
 fn extract(raw: &str, open: &str, close: &str) -> Result<String> {
-    let start = raw.find(open)
+    let start = raw
+        .find(open)
         .ok_or_else(|| anyhow!("soul.md missing opening tag: {}", open))?
         + open.len();
 
@@ -61,7 +61,10 @@ mod tests {
     #[test]
     fn default_soul_parses() {
         let soul = load(None).expect("default soul should parse");
-        assert!(!soul.logic_system_prompt.is_empty(), "logic prompt must not be empty");
+        assert!(
+            !soul.logic_system_prompt.is_empty(),
+            "logic prompt must not be empty"
+        );
         assert!(
             soul.logic_system_prompt.contains("telemetry engine"),
             "logic prompt should contain identity marker"
