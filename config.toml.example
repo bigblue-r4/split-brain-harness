@@ -1,0 +1,23 @@
+# split-brain-harness configuration
+# Copy to config.toml and edit. Environment variables override any value here.
+# Path to a custom config file: SBH_CONFIG=/path/to/config.toml
+
+# Backend: "ollama-native" | "openai-compat" | "anthropic" | "local-embedded"
+backend = "ollama-native"
+
+# API endpoint (backend-specific default used if omitted)
+# ollama-native:  http://localhost:11434
+# openai-compat:  http://localhost:8080
+# anthropic:      https://api.anthropic.com
+endpoint = "http://localhost:11434"
+
+# Model name (backend-specific default used if omitted)
+# ollama-native / openai-compat: llama3.2:3b
+# anthropic:                     claude-sonnet-4-6
+model_name = "llama3.2:3b"
+
+# API key — required for the "anthropic" backend
+# api_key = "sk-ant-..."
+
+# Path to a custom soul.md (empty = embedded default)
+# soul_path = "/path/to/soul.md"

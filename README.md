@@ -98,15 +98,40 @@ export SBH_MODEL=your-model-name
 split-brain-harness "your input"
 ```
 
-## Environment variables
+## Configuration
+
+Config is loaded in priority order: **env vars → config.toml → hardcoded defaults**. You only need to set what differs from the defaults.
+
+### config.toml
+
+Copy `config.toml.example` to `config.toml` and edit it:
+
+```toml
+backend    = "anthropic"
+model_name = "claude-opus-4-8"
+api_key    = "sk-ant-..."
+```
+
+All keys are optional. The file is loaded from `./config.toml` by default. To use a different path:
+
+```bash
+SBH_CONFIG=/etc/sbh/config.toml split-brain-harness "your input"
+```
+
+`config.toml` is in `.gitignore` — it will not be committed.
+
+### Environment variables
+
+Env vars override anything set in `config.toml`.
 
 | Variable | Default | Description |
 |---|---|---|
 | `SBH_BACKEND` | `ollama-native` | Backend to use |
-| `SBH_ENDPOINT` | `http://localhost:11434` | API endpoint (backend-specific default) |
-| `SBH_MODEL` | `llama3.2:3b` | Model name (`claude-sonnet-4-6` default for Anthropic) |
+| `SBH_ENDPOINT` | *(backend default)* | API endpoint |
+| `SBH_MODEL` | `llama3.2:3b` / `claude-sonnet-4-6` | Model name |
 | `SBH_API_KEY` | — | API key (required for `anthropic`) |
 | `SBH_SOUL_PATH` | — | Path to a custom `soul.md` (empty = embedded default) |
+| `SBH_CONFIG` | `./config.toml` | Path to config file |
 
 ## Library usage
 
