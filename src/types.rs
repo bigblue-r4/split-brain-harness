@@ -63,8 +63,6 @@ pub struct Soul {
 // Internal pipeline state types
 // ---------------------------------------------------------------------------
 
-pub struct RawInput(pub String);
-
 pub struct LogicReport {
     pub analytical_matrix: String,
 }

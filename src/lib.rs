@@ -1,4 +1,6 @@
+pub mod adaptor;
 pub mod backends;
+pub mod context_packs;
 pub mod extractor;
 pub mod harness;
 pub mod soul;

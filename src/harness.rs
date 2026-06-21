@@ -1,9 +1,8 @@
+use crate::adaptor;
 use crate::backends::InferenceEngine;
+use crate::context_packs::ContextPack;
 use crate::extractor;
-use crate::soul;
-use crate::types::{
-    Config, HarnessResult, LogicReport, RawInput, Soul, TelemetryResult, TraceEntry,
-};
+use crate::types::{Config, HarnessResult, LogicReport, Soul, TelemetryResult, TraceEntry};
 use crate::verifier;
 use anyhow::{anyhow, Result};
 
@@ -23,13 +22,13 @@ impl<'e> Harness<'e> {
     }
 
     /// Two-stage pipeline:
-    /// 1. Propose — logic node produces TelemetryResult
+    /// 1. Propose — logic node (with context pack augmentation) produces TelemetryResult
     /// 2. Verify  — deterministic checks ± optional LLM verifier pass
     pub async fn analyze(&self, input: &str) -> Result<HarnessResult> {
         let mut trace: Vec<TraceEntry> = vec![];
 
-        let (telemetry, propose_entry) = self.run_propose(input).await?;
-        trace.push(propose_entry);
+        let (telemetry, propose_entries) = self.run_propose(input).await?;
+        trace.extend(propose_entries);
 
         let (verification, verify_traces) = verifier::verify(
             input,
@@ -52,11 +51,29 @@ impl<'e> Harness<'e> {
     // Stage 1 — propose
     // -----------------------------------------------------------------------
 
-    async fn run_propose(&self, input: &str) -> Result<(TelemetryResult, TraceEntry)> {
-        let report = self.run_logic_node(RawInput(input.to_string())).await?;
+    async fn run_propose(&self, input: &str) -> Result<(TelemetryResult, Vec<TraceEntry>)> {
+        let active_packs = adaptor::select_packs(input);
+        let mut entries: Vec<TraceEntry> = vec![];
+
+        if !active_packs.is_empty() {
+            let names: Vec<&str> = active_packs.iter().map(|p| p.name).collect();
+            entries.push(TraceEntry {
+                stage: "context_injection".into(),
+                claim: format!(
+                    "{} context pack(s) active: {}",
+                    active_packs.len(),
+                    names.join(", ")
+                ),
+                evidence: None,
+                passed: true,
+                note: None,
+            });
+        }
+
+        let report = self.run_logic_node(input, &active_packs).await?;
         let telemetry: TelemetryResult = extractor::extract(&report.analytical_matrix)?;
 
-        let entry = TraceEntry {
+        entries.push(TraceEntry {
             stage: "propose".into(),
             claim: format!(
                 "manipulation_risk={} emotion={} intensity={:.2}",
@@ -67,17 +84,22 @@ impl<'e> Harness<'e> {
             evidence: Some(truncate(input, 120)),
             passed: true,
             note: None,
-        };
+        });
 
-        Ok((telemetry, entry))
+        Ok((telemetry, entries))
     }
 
-    async fn run_logic_node(&self, input: RawInput) -> Result<LogicReport> {
-        let payload = soul::wrap_payload(&input.0);
+    async fn run_logic_node(
+        &self,
+        input: &str,
+        active_packs: &[&'static ContextPack],
+    ) -> Result<LogicReport> {
+        let (system_prompt, payload) =
+            adaptor::prepare(&self.soul.logic_system_prompt, input, active_packs);
 
         let raw_response = self
             .engine
-            .generate(&self.soul.logic_system_prompt, &payload)
+            .generate(&system_prompt, &payload)
             .await
             .map_err(|e| anyhow!("inference backend error: {}", e))?;
 
