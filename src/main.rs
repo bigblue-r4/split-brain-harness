@@ -1,6 +1,14 @@
 use anyhow::{anyhow, Result};
 use split_brain_harness::{
-    analyze, config::build_config, prepare_prompt, soul, types::HarnessResult,
+    analyze, backends,
+    capability::{Budget, CapabilityConstraints, CapabilityRequest},
+    config::build_config,
+    prepare_prompt,
+    regenerative_forge::RegenerativeForge,
+    soul,
+    tool_memory::CapabilityMemory,
+    types::HarnessResult,
+    wasm_forge::{RustcCompiler, WasmtimeCli},
 };
 use std::io::Read;
 
@@ -31,6 +39,11 @@ async fn main() -> Result<()> {
             config.dump_raw = true;
             cmd_debug_bundle(&input, &config, output.as_deref()).await
         }
+        Command::Forge {
+            capability,
+            input,
+            max_retries,
+        } => cmd_forge(&capability, &input, max_retries, &config).await,
     }
 }
 
@@ -58,12 +71,17 @@ enum Command {
         input: String,
         output: Option<String>,
     },
+    Forge {
+        capability: String,
+        input: String,
+        max_retries: usize,
+    },
 }
 
 /// Collect positional args (non-flag args), skipping values consumed by
 /// known flags like --output and --base.
 fn positional_args(args: &[String]) -> Vec<&str> {
-    const FLAGS_WITH_VALUES: &[&str] = &["--output", "--base"];
+    const FLAGS_WITH_VALUES: &[&str] = &["--output", "--base", "--capability", "--max-retries"];
     let mut result = vec![];
     let mut skip_next = false;
     for arg in &args[1..] {
@@ -128,6 +146,47 @@ fn parse_command(args: &[String]) -> Result<Command> {
         _ => {}
     }
 
+    if positional.first() == Some(&"forge") {
+        let capability = flag_value(args, "--capability")
+            .or_else(|| positional.get(1).map(|s| s.to_string()))
+            .ok_or_else(|| {
+                anyhow!(
+                    "forge requires a capability description\n\
+                     Usage: split-brain-harness forge \"capability\" \"input\"\n\
+                     Usage: split-brain-harness forge --capability \"capability\" \"input\"\n\
+                     Usage: split-brain-harness forge --capability \"capability\" --stdin"
+                )
+            })?;
+        let max_retries = flag_value(args, "--max-retries")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(3usize);
+        let input = if args.contains(&"--stdin".to_string()) {
+            let mut s = String::new();
+            std::io::stdin().read_to_string(&mut s)?;
+            s.trim().to_string()
+        } else {
+            // If --capability was a flag, all positional after "forge" are input.
+            // If capability came from positional[1], input is positional[2..].
+            let input_positional: Vec<&str> = if flag_value(args, "--capability").is_some() {
+                positional[1..].to_vec()
+            } else {
+                positional.get(2..).unwrap_or(&[]).to_vec()
+            };
+            if input_positional.is_empty() {
+                return Err(anyhow!(
+                    "forge requires input data or --stdin\n\
+                     Usage: split-brain-harness forge \"capability\" \"input data\""
+                ));
+            }
+            input_positional.join(" ")
+        };
+        return Ok(Command::Forge {
+            capability,
+            input,
+            max_retries,
+        });
+    }
+
     if args.contains(&"--stdin".to_string()) {
         let mut input = String::new();
         std::io::stdin().read_to_string(&mut input)?;
@@ -147,7 +206,8 @@ fn parse_command(args: &[String]) -> Result<Command> {
              Usage: split-brain-harness doctor\n\
              Usage: split-brain-harness demo\n\
              Usage: split-brain-harness export-ollama --base <model> [--output <file>]\n\
-             Usage: split-brain-harness debug-bundle [--output <file>] \"input\""
+             Usage: split-brain-harness debug-bundle [--output <file>] \"input\"\n\
+             Usage: split-brain-harness forge \"capability\" \"input\""
         ));
     }
 
@@ -502,6 +562,84 @@ async fn cmd_debug_bundle(
 }
 
 // ---------------------------------------------------------------------------
+// forge — generate, sandbox, and execute a capability tool
+// ---------------------------------------------------------------------------
+
+async fn cmd_forge(
+    capability: &str,
+    input: &str,
+    max_retries: usize,
+    config: &split_brain_harness::types::Config,
+) -> Result<()> {
+    let loaded_soul =
+        soul::load(Some(&config.soul_path)).map_err(|e| anyhow!("failed to load soul: {e}"))?;
+    let engine = backends::init_engine(config);
+
+    // Load persisted memory if a path is configured
+    let saved_memory = match &config.memory_path {
+        Some(path) => match CapabilityMemory::load(std::path::Path::new(path)) {
+            Ok(m) => {
+                eprintln!("forge: loaded memory from {path}");
+                m
+            }
+            Err(e) => {
+                eprintln!("forge: warning — could not load memory from {path}: {e}");
+                CapabilityMemory::new()
+            }
+        },
+        None => CapabilityMemory::new(),
+    };
+
+    let req = CapabilityRequest {
+        kind: "capability_request".into(),
+        capability: capability.into(),
+        input_contract: "utf8 text".into(),
+        output_contract: "utf8 text result".into(),
+        constraints: CapabilityConstraints::default(),
+        reason: "direct forge invocation via CLI".into(),
+    };
+
+    let mut forge = RegenerativeForge::with_deps(
+        max_retries,
+        Budget::default(),
+        engine.as_ref(),
+        loaded_soul,
+        Box::new(RustcCompiler),
+        Box::new(WasmtimeCli),
+    );
+    forge.memory = saved_memory;
+
+    eprintln!(
+        "forge: capability={:?} max_retries={} backend={} model={}",
+        capability, max_retries, config.backend, config.model_name
+    );
+    eprintln!("forge: generating and sandboxing tool…");
+
+    let report = forge.handle(&req, input).await;
+
+    // Persist memory after the run
+    if let Some(ref path) = config.memory_path {
+        match forge.memory.save(std::path::Path::new(path)) {
+            Ok(()) => eprintln!("forge: memory saved to {path}"),
+            Err(e) => eprintln!("forge: warning — could not save memory to {path}: {e}"),
+        }
+    }
+
+    println!("{}", serde_json::to_string_pretty(&report)?);
+
+    if report.accepted && !report.succeeded {
+        let n = report.attempts.len();
+        eprintln!(
+            "forge: {} attempt(s) exhausted without success — check generation errors above",
+            n
+        );
+        std::process::exit(1);
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Unit tests for arg parsing
 // ---------------------------------------------------------------------------
 
@@ -656,6 +794,60 @@ mod tests {
     #[test]
     fn parse_debug_bundle_no_input_returns_error() {
         let a = args(&["sbh", "debug-bundle"]);
+        assert!(parse_command(&a).is_err());
+    }
+
+    // --- forge ---
+
+    #[test]
+    fn parse_forge_two_positionals() {
+        let a = args(&["sbh", "forge", "word count", "hello world"]);
+        match parse_command(&a).unwrap() {
+            Command::Forge {
+                capability,
+                input,
+                max_retries,
+            } => {
+                assert_eq!(capability, "word count");
+                assert_eq!(input, "hello world");
+                assert_eq!(max_retries, 3);
+            }
+            _ => panic!("expected Forge"),
+        }
+    }
+
+    #[test]
+    fn parse_forge_with_capability_flag() {
+        let a = args(&["sbh", "forge", "--capability", "word count", "hello world"]);
+        match parse_command(&a).unwrap() {
+            Command::Forge {
+                capability, input, ..
+            } => {
+                assert_eq!(capability, "word count");
+                assert_eq!(input, "hello world");
+            }
+            _ => panic!("expected Forge"),
+        }
+    }
+
+    #[test]
+    fn parse_forge_max_retries_flag() {
+        let a = args(&["sbh", "forge", "--max-retries", "5", "count", "data"]);
+        match parse_command(&a).unwrap() {
+            Command::Forge { max_retries, .. } => assert_eq!(max_retries, 5),
+            _ => panic!("expected Forge"),
+        }
+    }
+
+    #[test]
+    fn parse_forge_no_capability_returns_error() {
+        let a = args(&["sbh", "forge"]);
+        assert!(parse_command(&a).is_err());
+    }
+
+    #[test]
+    fn parse_forge_no_input_returns_error() {
+        let a = args(&["sbh", "forge", "word count"]);
         assert!(parse_command(&a).is_err());
     }
 }

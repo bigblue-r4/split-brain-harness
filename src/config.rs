@@ -10,6 +10,7 @@ struct FileConfig {
     api_key: Option<String>,
     verify_mode: Option<String>,
     timeout_secs: Option<u64>,
+    memory_path: Option<String>,
 }
 
 fn load_file_config() -> FileConfig {
@@ -76,5 +77,6 @@ pub fn build_config() -> Config {
             .unwrap_or(120),
         dump_prompt: false,
         dump_raw: false,
+        memory_path: std::env::var("SBH_MEMORY_PATH").ok().or(file.memory_path),
     }
 }

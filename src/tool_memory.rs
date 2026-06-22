@@ -1,12 +1,19 @@
-/// In-memory capability memory store.
+/// Capability memory store with optional JSON persistence.
 ///
-/// After each successful run the supervisor stores a fingerprint — the problem
+/// After each run the supervisor stores a fingerprint — the problem
 /// signature, solution pattern, and performance metrics. Generated binaries are
 /// never stored; the pattern is regenerated and reverified on every future use.
+///
+/// Call `save(path)` to persist after a session and `load(path)` to restore
+/// in the next session. Unknown paths return an empty store rather than an error.
+use std::path::Path;
+
+use serde::{Deserialize, Serialize};
+
 use crate::capability::{CapabilityMemoryRecord, CapabilityRequest, ToolMetrics};
 
 /// Running performance metrics accumulated across all runs of one pattern.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct PatternMetrics {
     pub runs: u64,
     pub successes: u64,
@@ -47,7 +54,7 @@ impl PatternMetrics {
 }
 
 /// One entry in capability memory.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryEntry {
     pub record: CapabilityMemoryRecord,
     pub metrics: PatternMetrics,
@@ -89,6 +96,28 @@ impl CapabilityMemory {
                 metrics: pm,
             });
         }
+    }
+
+    /// Serialize all entries to a JSON file at `path`.
+    pub fn save(&self, path: &Path) -> Result<(), String> {
+        let json = serde_json::to_string_pretty(&self.entries)
+            .map_err(|e| format!("serialize error: {e}"))?;
+        std::fs::write(path, json)
+            .map_err(|e| format!("failed to write memory to {}: {e}", path.display()))?;
+        Ok(())
+    }
+
+    /// Load entries from a JSON file. Returns an empty store if the path does
+    /// not exist (first run). Returns `Err` only on parse failures.
+    pub fn load(path: &Path) -> Result<Self, String> {
+        if !path.exists() {
+            return Ok(Self::new());
+        }
+        let json = std::fs::read_to_string(path)
+            .map_err(|e| format!("failed to read memory from {}: {e}", path.display()))?;
+        let entries: Vec<MemoryEntry> = serde_json::from_str(&json)
+            .map_err(|e| format!("failed to parse memory file {}: {e}", path.display()))?;
+        Ok(Self { entries })
     }
 
     /// Total number of distinct patterns stored.
@@ -233,6 +262,68 @@ mod tests {
         assert_ne!(
             CapabilityMemory::derive_signature(&req_a),
             CapabilityMemory::derive_signature(&req_b)
+        );
+    }
+
+    // --- Persistence ---
+
+    #[test]
+    fn save_and_load_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("memory.json");
+
+        let mut mem = CapabilityMemory::new();
+        mem.upsert(make_record("word_count:utf8:json"), &ok_metrics());
+        mem.upsert(
+            make_record("word_count:utf8:json"),
+            &ToolMetrics {
+                success: false,
+                ..Default::default()
+            },
+        );
+        mem.save(&path).unwrap();
+
+        let loaded = CapabilityMemory::load(&path).unwrap();
+        assert_eq!(loaded.len(), 1);
+        let entry = loaded.lookup("word_count:utf8:json").unwrap();
+        assert_eq!(entry.metrics.runs, 2);
+        assert_eq!(entry.metrics.successes, 1);
+        assert_eq!(entry.metrics.consecutive_failures, 1);
+    }
+
+    #[test]
+    fn load_nonexistent_path_returns_empty() {
+        let path = std::path::Path::new("/tmp/sbh-memory-does-not-exist-xyz.json");
+        let mem = CapabilityMemory::load(path).unwrap();
+        assert!(mem.is_empty());
+    }
+
+    #[test]
+    fn load_corrupt_file_returns_err() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad.json");
+        std::fs::write(&path, b"not valid json [[{{").unwrap();
+        assert!(CapabilityMemory::load(&path).is_err());
+    }
+
+    #[test]
+    fn save_preserves_consecutive_failures() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mem.json");
+
+        let mut mem = CapabilityMemory::new();
+        let fail = ToolMetrics {
+            success: false,
+            ..Default::default()
+        };
+        mem.upsert(make_record("sig"), &fail);
+        mem.upsert(make_record("sig"), &fail);
+        mem.save(&path).unwrap();
+
+        let loaded = CapabilityMemory::load(&path).unwrap();
+        assert_eq!(
+            loaded.lookup("sig").unwrap().metrics.consecutive_failures,
+            2
         );
     }
 }

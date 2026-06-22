@@ -75,6 +75,7 @@ fn make_config() -> Config {
         timeout_secs: 30,
         dump_prompt: false,
         dump_raw: false,
+        memory_path: None,
     }
 }
 

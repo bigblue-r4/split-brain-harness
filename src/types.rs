@@ -51,6 +51,9 @@ pub struct Config {
     pub dump_prompt: bool,
     /// Print raw model output to stderr before extraction.
     pub dump_raw: bool,
+    /// Path to the capability memory JSON file for forge persistence.
+    /// None = in-memory only (no cross-session reputation).
+    pub memory_path: Option<String>,
 }
 
 impl std::fmt::Display for BackendType {
