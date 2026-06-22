@@ -1,5 +1,7 @@
 use anyhow::{anyhow, Result};
-use split_brain_harness::{analyze, config::build_config, soul, types::HarnessResult};
+use split_brain_harness::{
+    analyze, config::build_config, prepare_prompt, soul, types::HarnessResult,
+};
 use std::io::Read;
 
 #[tokio::main]
@@ -15,7 +17,9 @@ async fn main() -> Result<()> {
             dump_raw,
             input,
         } => {
-            config.dump_prompt = dump_prompt;
+            if dump_prompt {
+                return cmd_dump_prompt(&input, &config);
+            }
             config.dump_raw = dump_raw;
             cmd_analyze(&input, &config, raw, trace).await
         }
@@ -56,17 +60,41 @@ enum Command {
     },
 }
 
+/// Collect positional args (non-flag args), skipping values consumed by
+/// known flags like --output and --base.
+fn positional_args(args: &[String]) -> Vec<&str> {
+    const FLAGS_WITH_VALUES: &[&str] = &["--output", "--base"];
+    let mut result = vec![];
+    let mut skip_next = false;
+    for arg in &args[1..] {
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        if FLAGS_WITH_VALUES.contains(&arg.as_str()) {
+            skip_next = true;
+            continue;
+        }
+        if arg.starts_with("--") {
+            continue;
+        }
+        result.push(arg.as_str());
+    }
+    result
+}
+
+fn flag_value(args: &[String], flag: &str) -> Option<String> {
+    let pos = args.iter().position(|a| a == flag)?;
+    args.get(pos + 1).cloned()
+}
+
 fn parse_command(args: &[String]) -> Result<Command> {
     let raw = args.contains(&"--raw".to_string());
     let show_trace = args.contains(&"--trace".to_string());
     let dump_prompt = args.contains(&"--dump-prompt".to_string());
     let dump_raw = args.contains(&"--dump-raw".to_string());
 
-    let positional: Vec<&str> = args[1..]
-        .iter()
-        .filter(|a| !a.starts_with("--"))
-        .map(|s| s.as_str())
-        .collect();
+    let positional = positional_args(args);
 
     match positional.first().copied() {
         Some("doctor") => return Ok(Command::Doctor),
@@ -85,7 +113,6 @@ fn parse_command(args: &[String]) -> Result<Command> {
                 std::io::stdin().read_to_string(&mut s)?;
                 s.trim().to_string()
             } else {
-                // remaining positional args after "debug-bundle"
                 let rest: Vec<&str> = positional[1..].to_vec();
                 if rest.is_empty() {
                     return Err(anyhow!(
@@ -133,9 +160,21 @@ fn parse_command(args: &[String]) -> Result<Command> {
     })
 }
 
-fn flag_value(args: &[String], flag: &str) -> Option<String> {
-    let pos = args.iter().position(|a| a == flag)?;
-    args.get(pos + 1).cloned()
+// ---------------------------------------------------------------------------
+// dump-prompt (early exit — no model call)
+// ---------------------------------------------------------------------------
+
+fn cmd_dump_prompt(input: &str, config: &split_brain_harness::types::Config) -> Result<()> {
+    let (system_prompt, payload) =
+        prepare_prompt(input, config).map_err(|e| anyhow!("failed to build prompt: {e}"))?;
+    eprintln!(
+        "=== dump-prompt: system ({} chars) ===",
+        system_prompt.len()
+    );
+    println!("{system_prompt}");
+    eprintln!("=== dump-prompt: payload ({} chars) ===", payload.len());
+    println!("{payload}");
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -460,4 +499,163 @@ async fn cmd_debug_bundle(
     }
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests for arg parsing
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    // --- positional_args ---
+
+    #[test]
+    fn positional_skips_flag_value_for_output() {
+        let a = args(&["sbh", "debug-bundle", "my input", "--output", "file.json"]);
+        let pos = positional_args(&a);
+        assert_eq!(pos, vec!["debug-bundle", "my input"]);
+    }
+
+    #[test]
+    fn positional_skips_flag_value_for_base() {
+        let a = args(&["sbh", "export-ollama", "--base", "llama3.2:3b"]);
+        let pos = positional_args(&a);
+        assert_eq!(pos, vec!["export-ollama"]);
+    }
+
+    #[test]
+    fn positional_preserves_non_flag_args() {
+        let a = args(&["sbh", "--trace", "hello world"]);
+        let pos = positional_args(&a);
+        assert_eq!(pos, vec!["hello world"]);
+    }
+
+    // --- parse_command ---
+
+    #[test]
+    fn parse_debug_bundle_strips_output_from_input() {
+        let a = args(&[
+            "sbh",
+            "debug-bundle",
+            "test input",
+            "--output",
+            "bundle.json",
+        ]);
+        match parse_command(&a).unwrap() {
+            Command::DebugBundle { input, output } => {
+                assert_eq!(input, "test input");
+                assert_eq!(output.as_deref(), Some("bundle.json"));
+            }
+            _ => panic!("expected DebugBundle"),
+        }
+    }
+
+    #[test]
+    fn parse_debug_bundle_output_before_input() {
+        let a = args(&["sbh", "debug-bundle", "--output", "out.json", "test input"]);
+        match parse_command(&a).unwrap() {
+            Command::DebugBundle { input, output } => {
+                assert_eq!(input, "test input");
+                assert_eq!(output.as_deref(), Some("out.json"));
+            }
+            _ => panic!("expected DebugBundle"),
+        }
+    }
+
+    #[test]
+    fn parse_dump_prompt_flag() {
+        let a = args(&["sbh", "--dump-prompt", "hello"]);
+        match parse_command(&a).unwrap() {
+            Command::Analyze {
+                dump_prompt,
+                dump_raw,
+                input,
+                ..
+            } => {
+                assert!(dump_prompt);
+                assert!(!dump_raw);
+                assert_eq!(input, "hello");
+            }
+            _ => panic!("expected Analyze"),
+        }
+    }
+
+    #[test]
+    fn parse_dump_raw_flag() {
+        let a = args(&["sbh", "--dump-raw", "hello"]);
+        match parse_command(&a).unwrap() {
+            Command::Analyze {
+                dump_prompt,
+                dump_raw,
+                ..
+            } => {
+                assert!(!dump_prompt);
+                assert!(dump_raw);
+            }
+            _ => panic!("expected Analyze"),
+        }
+    }
+
+    #[test]
+    fn parse_doctor() {
+        let a = args(&["sbh", "doctor"]);
+        assert!(matches!(parse_command(&a).unwrap(), Command::Doctor));
+    }
+
+    #[test]
+    fn parse_demo_raw() {
+        let a = args(&["sbh", "demo", "--raw"]);
+        match parse_command(&a).unwrap() {
+            Command::Demo { raw } => assert!(raw),
+            _ => panic!("expected Demo"),
+        }
+    }
+
+    #[test]
+    fn parse_export_ollama() {
+        let a = args(&[
+            "sbh",
+            "export-ollama",
+            "--base",
+            "llama3.2:3b",
+            "--output",
+            "Modelfile",
+        ]);
+        match parse_command(&a).unwrap() {
+            Command::ExportOllama { base, output } => {
+                assert_eq!(base, "llama3.2:3b");
+                assert_eq!(output, "Modelfile");
+            }
+            _ => panic!("expected ExportOllama"),
+        }
+    }
+
+    #[test]
+    fn parse_export_ollama_default_output() {
+        let a = args(&["sbh", "export-ollama", "--base", "llama3.2:3b"]);
+        match parse_command(&a).unwrap() {
+            Command::ExportOllama { output, .. } => {
+                assert_eq!(output, "Modelfile.split-brain");
+            }
+            _ => panic!("expected ExportOllama"),
+        }
+    }
+
+    #[test]
+    fn parse_no_args_returns_error() {
+        let a = args(&["sbh"]);
+        assert!(parse_command(&a).is_err());
+    }
+
+    #[test]
+    fn parse_debug_bundle_no_input_returns_error() {
+        let a = args(&["sbh", "debug-bundle"]);
+        assert!(parse_command(&a).is_err());
+    }
 }

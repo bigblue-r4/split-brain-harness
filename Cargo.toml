@@ -25,3 +25,9 @@ path = "src/bin/monitor.rs"
 [lib]
 name = "split_brain_harness"
 path = "src/lib.rs"
+
+[dev-dependencies]
+tempfile = "3"
+
+[features]
+live-tests = []
