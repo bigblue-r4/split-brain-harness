@@ -5,13 +5,28 @@ use std::io::Read;
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    let config = build_config();
+    let mut config = build_config();
 
     match parse_command(&args)? {
-        Command::Analyze { raw, trace, input } => cmd_analyze(&input, &config, raw, trace).await,
+        Command::Analyze {
+            raw,
+            trace,
+            dump_prompt,
+            dump_raw,
+            input,
+        } => {
+            config.dump_prompt = dump_prompt;
+            config.dump_raw = dump_raw;
+            cmd_analyze(&input, &config, raw, trace).await
+        }
         Command::Doctor => cmd_doctor(&config).await,
         Command::Demo { raw } => cmd_demo(&config, raw).await,
         Command::ExportOllama { base, output } => cmd_export_ollama(&config, &base, &output),
+        Command::DebugBundle { input, output } => {
+            config.dump_prompt = true;
+            config.dump_raw = true;
+            cmd_debug_bundle(&input, &config, output.as_deref()).await
+        }
     }
 }
 
@@ -23,6 +38,8 @@ enum Command {
     Analyze {
         raw: bool,
         trace: bool,
+        dump_prompt: bool,
+        dump_raw: bool,
         input: String,
     },
     Doctor,
@@ -33,11 +50,17 @@ enum Command {
         base: String,
         output: String,
     },
+    DebugBundle {
+        input: String,
+        output: Option<String>,
+    },
 }
 
 fn parse_command(args: &[String]) -> Result<Command> {
     let raw = args.contains(&"--raw".to_string());
     let show_trace = args.contains(&"--trace".to_string());
+    let dump_prompt = args.contains(&"--dump-prompt".to_string());
+    let dump_raw = args.contains(&"--dump-raw".to_string());
 
     let positional: Vec<&str> = args[1..]
         .iter()
@@ -55,6 +78,26 @@ fn parse_command(args: &[String]) -> Result<Command> {
                 flag_value(args, "--output").unwrap_or_else(|| "Modelfile.split-brain".to_string());
             return Ok(Command::ExportOllama { base, output });
         }
+        Some("debug-bundle") => {
+            let output = flag_value(args, "--output");
+            let input = if args.contains(&"--stdin".to_string()) {
+                let mut s = String::new();
+                std::io::stdin().read_to_string(&mut s)?;
+                s.trim().to_string()
+            } else {
+                // remaining positional args after "debug-bundle"
+                let rest: Vec<&str> = positional[1..].to_vec();
+                if rest.is_empty() {
+                    return Err(anyhow!(
+                        "debug-bundle requires input text or --stdin\n\
+                         Usage: split-brain-harness debug-bundle [--output <file>] \"input\"\n\
+                         Usage: split-brain-harness debug-bundle --stdin [--output <file>]"
+                    ));
+                }
+                rest.join(" ")
+            };
+            return Ok(Command::DebugBundle { input, output });
+        }
         _ => {}
     }
 
@@ -64,23 +107,28 @@ fn parse_command(args: &[String]) -> Result<Command> {
         return Ok(Command::Analyze {
             raw,
             trace: show_trace,
+            dump_prompt,
+            dump_raw,
             input: input.trim().to_string(),
         });
     }
 
     if positional.is_empty() {
         return Err(anyhow!(
-            "Usage: split-brain-harness [--raw] [--trace] \"input text\"\n\
-             Usage: split-brain-harness --stdin [--raw] [--trace]\n\
+            "Usage: split-brain-harness [--raw] [--trace] [--dump-prompt] [--dump-raw] \"input\"\n\
+             Usage: split-brain-harness --stdin [--raw] [--trace] [--dump-prompt] [--dump-raw]\n\
              Usage: split-brain-harness doctor\n\
              Usage: split-brain-harness demo\n\
-             Usage: split-brain-harness export-ollama --base <model> [--output <file>]"
+             Usage: split-brain-harness export-ollama --base <model> [--output <file>]\n\
+             Usage: split-brain-harness debug-bundle [--output <file>] \"input\""
         ));
     }
 
     Ok(Command::Analyze {
         raw,
         trace: show_trace,
+        dump_prompt,
+        dump_raw,
         input: positional.join(" "),
     })
 }
@@ -248,7 +296,6 @@ async fn cmd_demo(config: &split_brain_harness::types::Config, raw: bool) -> Res
         ),
     ];
 
-    // Quick reachability check for Ollama
     if matches!(config.backend, BackendType::OllamaNative) {
         let client = reqwest::Client::new();
         let ping = client
@@ -310,7 +357,6 @@ fn cmd_export_ollama(
     let loaded_soul =
         soul::load(Some(&config.soul_path)).map_err(|e| anyhow!("failed to load soul: {e}"))?;
 
-    // Escape any triple-quote sequences that would break the Modelfile SYSTEM block.
     let sys = loaded_soul
         .logic_system_prompt
         .replace("\"\"\"", "\\\"\\\"\\\"");
@@ -340,6 +386,78 @@ fn cmd_export_ollama(
     println!("next steps:");
     println!("  ollama create split-brain:latest -f {output}");
     println!("  ollama run split-brain:latest \"your input text\"");
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// debug-bundle
+// ---------------------------------------------------------------------------
+
+async fn cmd_debug_bundle(
+    input: &str,
+    config: &split_brain_harness::types::Config,
+    output: Option<&str>,
+) -> Result<()> {
+    eprintln!(
+        "split-brain-harness debug-bundle: backend={} model={} endpoint={}",
+        config.backend, config.model_name, config.endpoint
+    );
+    eprintln!("split-brain-harness debug-bundle: running analysis…");
+
+    let start = std::time::Instant::now();
+    let result = analyze(input, config).await;
+    let elapsed_ms = start.elapsed().as_millis();
+
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+
+    let bundle = match result {
+        Ok(ref r) => serde_json::json!({
+            "timestamp_unix": ts,
+            "input": input,
+            "elapsed_ms": elapsed_ms,
+            "config": {
+                "backend":       config.backend.to_string(),
+                "endpoint":      config.endpoint,
+                "model_name":    config.model_name,
+                "verify_mode":   config.verify_mode.to_string(),
+                "timeout_secs":  config.timeout_secs,
+                "dump_prompt":   config.dump_prompt,
+                "dump_raw":      config.dump_raw,
+            },
+            "result": { "ok": r },
+        }),
+        Err(ref e) => serde_json::json!({
+            "timestamp_unix": ts,
+            "input": input,
+            "elapsed_ms": elapsed_ms,
+            "config": {
+                "backend":       config.backend.to_string(),
+                "endpoint":      config.endpoint,
+                "model_name":    config.model_name,
+                "verify_mode":   config.verify_mode.to_string(),
+                "timeout_secs":  config.timeout_secs,
+                "dump_prompt":   config.dump_prompt,
+                "dump_raw":      config.dump_raw,
+            },
+            "result": { "error": e.to_string() },
+        }),
+    };
+
+    let default_path = format!("sbh-debug-{ts}.json");
+    let out_path = output.unwrap_or(&default_path);
+    std::fs::write(out_path, serde_json::to_string_pretty(&bundle)?)
+        .map_err(|e| anyhow!("failed to write bundle: {e}"))?;
+
+    eprintln!("split-brain-harness debug-bundle: elapsed {}ms", elapsed_ms);
+    println!("bundle saved: {out_path}");
+
+    if result.is_err() {
+        return Err(anyhow!("analysis failed — see bundle for details"));
+    }
 
     Ok(())
 }

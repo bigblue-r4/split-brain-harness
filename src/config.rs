@@ -74,5 +74,7 @@ pub fn build_config() -> Config {
             .and_then(|s| s.parse().ok())
             .or(file.timeout_secs)
             .unwrap_or(120),
+        dump_prompt: false,
+        dump_raw: false,
     }
 }

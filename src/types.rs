@@ -47,6 +47,10 @@ pub struct Config {
     pub api_key: Option<String>,
     pub verify_mode: VerifyMode,
     pub timeout_secs: u64,
+    /// Print system prompt + payload to stderr before the model call.
+    pub dump_prompt: bool,
+    /// Print raw model output to stderr before extraction.
+    pub dump_raw: bool,
 }
 
 impl std::fmt::Display for BackendType {
@@ -79,14 +83,6 @@ pub struct Soul {
     pub logic_system_prompt: String,
     pub creative_system_prompt: String,
     pub verifier_system_prompt: String,
-}
-
-// ---------------------------------------------------------------------------
-// Internal pipeline state types
-// ---------------------------------------------------------------------------
-
-pub struct LogicReport {
-    pub analytical_matrix: String,
 }
 
 // ---------------------------------------------------------------------------

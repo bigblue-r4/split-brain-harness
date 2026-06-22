@@ -140,6 +140,60 @@ echo "your input" | split-brain-harness --stdin
 split-brain-harness --raw "your input"
 ```
 
+### Debugging flags
+
+Three flags help diagnose what the harness sends and receives at the model boundary:
+
+```bash
+# print the exact system prompt and payload sent to the model (before the API call)
+split-brain-harness --dump-prompt "your input"
+
+# print the raw model response string before extraction/parsing
+split-brain-harness --dump-raw "your input"
+
+# combine both
+split-brain-harness --dump-prompt --dump-raw "your input"
+```
+
+Both flags print to stderr. They also add `debug-prompt` and `debug-raw` entries to the trace (visible with `--trace`).
+
+### debug-bundle
+
+Capture a full diagnostic snapshot to a JSON file — config, prompt, raw output, trace (including `debug-prompt`/`debug-raw` entries), timing, and any errors:
+
+```bash
+split-brain-harness debug-bundle "your input"
+# writes: sbh-debug-<timestamp>.json
+
+split-brain-harness debug-bundle --output my-bundle.json "your input"
+
+echo "your input" | split-brain-harness debug-bundle --stdin --output bundle.json
+```
+
+Bundle format:
+
+```json
+{
+  "timestamp_unix": 1750000000,
+  "input": "...",
+  "elapsed_ms": 1247,
+  "config": {
+    "backend": "ollama-native",
+    "endpoint": "http://localhost:11434",
+    "model_name": "llama3.2:3b",
+    "verify_mode": "deterministic",
+    "timeout_secs": 120,
+    "dump_prompt": true,
+    "dump_raw": true
+  },
+  "result": {
+    "ok": { "telemetry": { ... }, "verification": { ... }, "trace": [ ... ] }
+  }
+}
+```
+
+API keys are never written to the bundle.
+
 ### doctor
 
 Check that the backend is configured and reachable:
@@ -286,6 +340,8 @@ let config = Config {
     api_key:      Some("sk-ant-...".into()),
     verify_mode:  VerifyMode::Deterministic,
     timeout_secs: 120,
+    dump_prompt:  false,
+    dump_raw:     false,
 };
 
 let result = analyze("your input text", &config).await?;

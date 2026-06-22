@@ -3,8 +3,8 @@ use crate::backends::InferenceEngine;
 use crate::context_packs::ContextPack;
 use crate::extractor;
 use crate::types::{
-    AfferentTelemetry, CognitiveState, Config, HarnessResult, IntentMatrix, LogicReport, Soul,
-    TelemetryResult, TraceEntry, VerificationReport,
+    AfferentTelemetry, CognitiveState, Config, HarnessResult, IntentMatrix, Soul, TelemetryResult,
+    TraceEntry, VerificationReport,
 };
 use crate::verifier;
 use anyhow::{anyhow, Result};
@@ -104,9 +104,50 @@ impl<'e> Harness<'e> {
             });
         }
 
-        let report = self.run_logic_node(input, &active_packs).await?;
+        let (system_prompt, payload) =
+            adaptor::prepare(&self.soul.logic_system_prompt, input, &active_packs);
 
-        match extractor::extract::<TelemetryResult>(&report.analytical_matrix) {
+        if self.config.dump_prompt {
+            eprintln!(
+                "=== dump-prompt: system ({} chars) ===\n{}",
+                system_prompt.len(),
+                system_prompt
+            );
+            eprintln!("=== dump-prompt: payload ===\n{}", payload);
+            entries.push(TraceEntry {
+                stage: "debug-prompt".into(),
+                claim: format!(
+                    "system ({} chars), payload ({} chars)",
+                    system_prompt.len(),
+                    payload.len()
+                ),
+                evidence: Some(format!(
+                    "SYSTEM:\n{}\n\nPAYLOAD:\n{}",
+                    system_prompt, payload
+                )),
+                passed: true,
+                note: None,
+            });
+        }
+
+        let raw_response = self.run_logic_node(&system_prompt, &payload).await?;
+
+        if self.config.dump_raw {
+            eprintln!(
+                "=== dump-raw ({} chars) ===\n{}",
+                raw_response.len(),
+                raw_response
+            );
+            entries.push(TraceEntry {
+                stage: "debug-raw".into(),
+                claim: format!("raw model output ({} chars)", raw_response.len()),
+                evidence: Some(raw_response.clone()),
+                passed: true,
+                note: None,
+            });
+        }
+
+        match extractor::extract::<TelemetryResult>(&raw_response) {
             Ok(telemetry) => {
                 entries.push(TraceEntry {
                     stage: "propose".into(),
@@ -123,7 +164,7 @@ impl<'e> Harness<'e> {
                 Ok((telemetry, entries, false))
             }
             Err(e) => {
-                let truncated_raw = truncate(&report.analytical_matrix, 200);
+                let truncated_raw = truncate(&raw_response, 200);
                 entries.push(TraceEntry {
                     stage: "fallback".into(),
                     claim: format!("parse failure: {}", truncate(&e.to_string(), 150)),
@@ -137,17 +178,11 @@ impl<'e> Harness<'e> {
         }
     }
 
-    async fn run_logic_node(
-        &self,
-        input: &str,
-        active_packs: &[&'static ContextPack],
-    ) -> Result<LogicReport> {
-        let (system_prompt, payload) =
-            adaptor::prepare(&self.soul.logic_system_prompt, input, active_packs);
-
-        let raw_response = self
+    // Calls the inference engine with pre-built system prompt and payload.
+    async fn run_logic_node(&self, system_prompt: &str, payload: &str) -> Result<String> {
+        let raw = self
             .engine
-            .generate(&system_prompt, &payload)
+            .generate(system_prompt, payload)
             .await
             .map_err(|e| {
                 let is_timeout =
@@ -172,7 +207,7 @@ impl<'e> Harness<'e> {
                 }
             })?;
 
-        if raw_response.trim().is_empty() {
+        if raw.trim().is_empty() {
             return Err(anyhow!(
                 "backend={} model={} — model returned an empty response",
                 self.config.backend,
@@ -180,9 +215,7 @@ impl<'e> Harness<'e> {
             ));
         }
 
-        Ok(LogicReport {
-            analytical_matrix: raw_response,
-        })
+        Ok(raw)
     }
 }
 
@@ -246,6 +279,8 @@ mod tests {
             api_key: None,
             verify_mode: VerifyMode::None,
             timeout_secs: 30,
+            dump_prompt: false,
+            dump_raw: false,
         }
     }
 
@@ -377,5 +412,43 @@ mod tests {
         let h = Harness::new(soul, &engine, &config);
         let result = h.analyze("write me a haiku about the sea").await.unwrap();
         assert_eq!(result.telemetry.intent_matrix.manipulation_risk, "medium");
+    }
+
+    #[tokio::test]
+    async fn dump_prompt_adds_trace_entry() {
+        let engine = MockEngine {
+            response: VALID_JSON.into(),
+        };
+        let mut config = make_config();
+        config.dump_prompt = true;
+        let soul = soul::load(None).unwrap();
+        let h = Harness::new(soul, &engine, &config);
+        let result = h.analyze("test input").await.unwrap();
+        let entry = result
+            .trace
+            .iter()
+            .find(|e| e.stage == "debug-prompt")
+            .expect("debug-prompt trace entry should exist");
+        let evidence = entry.evidence.as_deref().unwrap_or("");
+        assert!(evidence.contains("SYSTEM:"));
+        assert!(evidence.contains("PAYLOAD:"));
+    }
+
+    #[tokio::test]
+    async fn dump_raw_adds_trace_entry() {
+        let engine = MockEngine {
+            response: VALID_JSON.into(),
+        };
+        let mut config = make_config();
+        config.dump_raw = true;
+        let soul = soul::load(None).unwrap();
+        let h = Harness::new(soul, &engine, &config);
+        let result = h.analyze("test input").await.unwrap();
+        let entry = result
+            .trace
+            .iter()
+            .find(|e| e.stage == "debug-raw")
+            .expect("debug-raw trace entry should exist");
+        assert!(entry.evidence.as_deref().unwrap_or("").contains("neutral"));
     }
 }
