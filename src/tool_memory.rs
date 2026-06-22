@@ -13,6 +13,8 @@ pub struct PatternMetrics {
     pub total_runtime_ms: u64,
     pub total_input_bytes: usize,
     pub total_output_bytes: usize,
+    /// Current unbroken streak of failures. Resets to 0 on any success.
+    pub consecutive_failures: u64,
 }
 
 impl PatternMetrics {
@@ -20,6 +22,9 @@ impl PatternMetrics {
         self.runs += 1;
         if metrics.success {
             self.successes += 1;
+            self.consecutive_failures = 0;
+        } else {
+            self.consecutive_failures += 1;
         }
         self.total_runtime_ms += metrics.runtime_ms;
         self.total_input_bytes += metrics.input_bytes;

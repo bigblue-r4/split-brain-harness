@@ -9,6 +9,8 @@ pub mod generative_forge;
 pub mod harness;
 pub mod input_validation;
 pub mod policy;
+pub mod regenerative_forge;
+pub mod reputation;
 pub mod soul;
 pub mod static_analysis;
 pub mod tool_forge;
