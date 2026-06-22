@@ -44,18 +44,18 @@ fn load_file_config() -> FileConfig {
 
 fn parse_backend(s: &str) -> (BackendType, &'static str) {
     match s {
-        "openai-compat"  => (BackendType::OpenAiCompat, "http://localhost:8080"),
-        "anthropic"      => (BackendType::Anthropic, "https://api.anthropic.com"),
+        "openai-compat" => (BackendType::OpenAiCompat, "http://localhost:8080"),
+        "anthropic" => (BackendType::Anthropic, "https://api.anthropic.com"),
         "local-embedded" => (BackendType::LocalEmbedded, ""),
-        _                => (BackendType::OllamaNative, "http://localhost:11434"),
+        _ => (BackendType::OllamaNative, "http://localhost:11434"),
     }
 }
 
 fn parse_verify_mode(s: &str) -> VerifyMode {
     match s {
-        "llm"  => VerifyMode::Llm,
+        "llm" => VerifyMode::Llm,
         "none" => VerifyMode::None,
-        _      => VerifyMode::Deterministic,
+        _ => VerifyMode::Deterministic,
     }
 }
 
@@ -177,8 +177,7 @@ struct OllamaChunkMsg {
 #[tokio::main]
 async fn main() -> Result<()> {
     let config = build_config();
-    let chat_model = std::env::var("SBH_CHAT_MODEL")
-        .unwrap_or_else(|_| config.model_name.clone());
+    let chat_model = std::env::var("SBH_CHAT_MODEL").unwrap_or_else(|_| config.model_name.clone());
     let ollama_endpoint = config.endpoint.clone();
 
     let app = App {
@@ -231,13 +230,17 @@ async fn run(
                 }
                 AppEvent::ChatDone => {
                     let content = std::mem::take(&mut app.streaming_buf);
-                    app.messages
-                        .push(ChatMessage { role: Role::Assistant, content });
+                    app.messages.push(ChatMessage {
+                        role: Role::Assistant,
+                        content,
+                    });
                     app.phase = Phase::Idle;
                 }
                 AppEvent::Error(e) => {
-                    app.messages
-                        .push(ChatMessage { role: Role::System, content: e });
+                    app.messages.push(ChatMessage {
+                        role: Role::System,
+                        content: e,
+                    });
                     app.streaming_buf.clear();
                     app.phase = Phase::Idle;
                 }
@@ -252,12 +255,12 @@ async fn run(
             match (key.code, key.modifiers) {
                 (KeyCode::Char('c'), KeyModifiers::CONTROL) | (KeyCode::Esc, _) => break,
 
-                (KeyCode::Enter, _)
-                    if app.phase == Phase::Idle && !app.input.is_empty() =>
-                {
+                (KeyCode::Enter, _) if app.phase == Phase::Idle && !app.input.is_empty() => {
                     let input = std::mem::take(&mut app.input);
-                    app.messages
-                        .push(ChatMessage { role: Role::User, content: input.clone() });
+                    app.messages.push(ChatMessage {
+                        role: Role::User,
+                        content: input.clone(),
+                    });
                     app.phase = Phase::Analyzing;
 
                     // Chat history: only conversational turns (not system error messages)
@@ -330,7 +333,11 @@ async fn stream_chat(
     let client = reqwest::Client::new();
     let mut resp = client
         .post(format!("{endpoint}/api/chat"))
-        .json(&OllamaChatRequest { model, messages, stream: true })
+        .json(&OllamaChatRequest {
+            model,
+            messages,
+            stream: true,
+        })
         .send()
         .await?;
 
@@ -370,8 +377,8 @@ fn ui(frame: &mut Frame, app: &App) {
 
     render_title(frame, root[0]);
 
-    let cols = Layout::horizontal([Constraint::Percentage(62), Constraint::Percentage(38)])
-        .split(root[1]);
+    let cols =
+        Layout::horizontal([Constraint::Percentage(62), Constraint::Percentage(38)]).split(root[1]);
     render_chat(frame, app, cols[0]);
     render_telemetry(frame, app, cols[1]);
 
@@ -384,11 +391,15 @@ fn render_title(frame: &mut Frame, area: Rect) {
         Paragraph::new(Line::from(vec![
             Span::styled(
                 " SGAIL Labs",
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 " ◆ Split-Brain Monitor",
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
             ),
         ])),
         area,
@@ -401,9 +412,9 @@ fn render_chat(frame: &mut Frame, app: &App, area: Rect) {
 
     for msg in &app.messages {
         let (prefix, color) = match msg.role {
-            Role::User      => ("  you  ", Color::Cyan),
+            Role::User => ("  you  ", Color::Cyan),
             Role::Assistant => ("  sbh  ", Color::Green),
-            Role::System    => ("  err  ", Color::Red),
+            Role::System => ("  err  ", Color::Red),
         };
         let mut chunks = msg.content.lines();
         if let Some(first) = chunks.next() {
@@ -433,7 +444,9 @@ fn render_chat(frame: &mut Frame, app: &App, area: Rect) {
             lines.push(Line::from(vec![
                 Span::styled(
                     "  sbh  ",
-                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw(first.to_string()),
                 Span::styled("▌", Style::default().fg(Color::DarkGray)),
@@ -448,7 +461,9 @@ fn render_chat(frame: &mut Frame, app: &App, area: Rect) {
             lines.push(Line::from(vec![
                 Span::styled(
                     "  sbh  ",
-                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled("▌", Style::default().fg(Color::DarkGray)),
             ]));
@@ -491,9 +506,9 @@ fn render_telemetry(frame: &mut Frame, app: &App, area: Rect) {
         Some(r) => {
             let risk = r.telemetry.intent_matrix.manipulation_risk.as_str();
             let (risk_color, risk_label) = match risk {
-                "high"   => (Color::Red,    " HIGH ⚠"),
+                "high" => (Color::Red, " HIGH ⚠"),
                 "medium" => (Color::Yellow, " MED  ▲"),
-                _        => (Color::Green,  " LOW  ✓"),
+                _ => (Color::Green, " LOW  ✓"),
             };
             let tone = r.telemetry.affective_telemetry.structural_tone.join(", ");
             let conf = r.verification.confidence;
@@ -507,14 +522,38 @@ fn render_telemetry(frame: &mut Frame, app: &App, area: Rect) {
 
             let mut lines: Vec<Line> = vec![
                 Line::from(""),
-                kv("  emotion  ", &r.telemetry.affective_telemetry.primary_emotion, Color::White),
-                kv("  intensity", &f2(&r.telemetry.affective_telemetry.emotional_intensity), Color::White),
-                kv("  urgency  ", &f2(&r.telemetry.cognitive_state.urgency_vector), Color::White),
-                kv("  coherence", &f2(&r.telemetry.cognitive_state.coherence_rating), Color::White),
+                kv(
+                    "  emotion  ",
+                    &r.telemetry.affective_telemetry.primary_emotion,
+                    Color::White,
+                ),
+                kv(
+                    "  intensity",
+                    &f2(&r.telemetry.affective_telemetry.emotional_intensity),
+                    Color::White,
+                ),
+                kv(
+                    "  urgency  ",
+                    &f2(&r.telemetry.cognitive_state.urgency_vector),
+                    Color::White,
+                ),
+                kv(
+                    "  coherence",
+                    &f2(&r.telemetry.cognitive_state.coherence_rating),
+                    Color::White,
+                ),
                 kv("  tone     ", &tone, Color::White),
                 Line::from(""),
-                kv("  objective", &r.telemetry.intent_matrix.stated_objective, Color::White),
-                kv("  subtext  ", &r.telemetry.intent_matrix.subtextual_motive, Color::White),
+                kv(
+                    "  objective",
+                    &r.telemetry.intent_matrix.stated_objective,
+                    Color::White,
+                ),
+                kv(
+                    "  subtext  ",
+                    &r.telemetry.intent_matrix.subtextual_motive,
+                    Color::White,
+                ),
                 Line::from(""),
                 Line::from(vec![
                     Span::styled("  risk     ", Style::default().fg(Color::DarkGray)),
@@ -570,9 +609,7 @@ fn render_telemetry(frame: &mut Frame, app: &App, area: Rect) {
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
                     "  ⚠  stop and ask",
-                    Style::default()
-                        .fg(Color::Red)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
                 )));
             }
 
@@ -585,7 +622,7 @@ fn render_telemetry(frame: &mut Frame, app: &App, area: Rect) {
 
 fn render_status(frame: &mut Frame, app: &App, area: Rect) {
     let phase = match app.phase {
-        Phase::Idle      => "idle",
+        Phase::Idle => "idle",
         Phase::Analyzing => "analyzing",
         Phase::Streaming => "streaming",
     };
@@ -593,7 +630,9 @@ fn render_status(frame: &mut Frame, app: &App, area: Rect) {
         Paragraph::new(Line::from(vec![
             Span::styled(
                 " SGAIL Labs",
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled("  analysis:", Style::default().fg(Color::DarkGray)),
             Span::styled(
@@ -605,10 +644,7 @@ fn render_status(frame: &mut Frame, app: &App, area: Rect) {
                 format!(" {} ", app.chat_model),
                 Style::default().fg(Color::White),
             ),
-            Span::styled(
-                format!(" [{phase}]"),
-                Style::default().fg(Color::DarkGray),
-            ),
+            Span::styled(format!(" [{phase}]"), Style::default().fg(Color::DarkGray)),
         ])),
         area,
     );
