@@ -87,7 +87,68 @@ impl CapabilityRequest {
 }
 
 // ---------------------------------------------------------------------------
-// Supervisor-side types — design-only in Phase 1, no execution logic
+// Supervisor-side types — Phase 2 additions
+// ---------------------------------------------------------------------------
+
+/// Measured execution metrics from one tool run (mock or real).
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ToolMetrics {
+    pub runtime_ms: u64,
+    pub input_bytes: usize,
+    pub output_bytes: usize,
+    pub success: bool,
+}
+
+/// A policy rule that was violated. Returned as a list from policy::check_request.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PolicyViolation {
+    pub rule: String,
+    pub detail: String,
+}
+
+/// Per-session cost budget enforced by the supervisor.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Budget {
+    /// Maximum distinct tool invocations per session.
+    pub max_tools_per_session: usize,
+    /// Cumulative wall-clock ms across all runs in this session.
+    pub max_total_runtime_ms: u64,
+    /// Require explicit approval after this many consecutive failures.
+    pub require_approval_after_failures: usize,
+}
+
+impl Default for Budget {
+    fn default() -> Self {
+        Self {
+            max_tools_per_session: 4,
+            max_total_runtime_ms: 30_000,
+            require_approval_after_failures: 2,
+        }
+    }
+}
+
+/// Full result returned by the supervisor after processing one CapabilityRequest.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ToolRunReport {
+    /// True if the request passed policy checks and a mock was found.
+    pub accepted: bool,
+    /// Non-empty when the request was rejected — each entry is one violation.
+    pub rejection_reasons: Vec<String>,
+    /// Always true for Phase 2 mocks (no generated source to verify yet).
+    pub verification_passed: bool,
+    /// True if the mock function ran to completion (even if it returned an error).
+    pub executed: bool,
+    /// Stdout of the mock tool — a JSON string on success, None on rejection.
+    pub output: Option<String>,
+    pub metrics: ToolMetrics,
+    /// Always true after execution — marks the lifecycle as complete.
+    pub destroyed: bool,
+    /// Set when the run succeeds and memory was updated.
+    pub memory_update: Option<CapabilityMemoryRecord>,
+}
+
+// ---------------------------------------------------------------------------
+// Supervisor-side types — design-only in Phase 1 (manifests, permissions, limits)
 // ---------------------------------------------------------------------------
 
 /// Verification steps the supervisor must run before a tool may execute.

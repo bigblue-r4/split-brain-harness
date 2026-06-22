@@ -5,7 +5,10 @@ pub mod config;
 pub mod context_packs;
 pub mod extractor;
 pub mod harness;
+pub mod policy;
 pub mod soul;
+pub mod tool_forge;
+pub mod tool_memory;
 pub mod types;
 pub mod verifier;
 
