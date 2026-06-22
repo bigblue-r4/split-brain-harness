@@ -83,6 +83,7 @@ pub struct Soul {
     pub logic_system_prompt: String,
     pub creative_system_prompt: String,
     pub verifier_system_prompt: String,
+    pub code_gen_system_prompt: String,
 }
 
 // ---------------------------------------------------------------------------

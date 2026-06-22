@@ -9,6 +9,8 @@ const OPEN_CREATIVE: &str = "[CREATIVE_SYSTEM_PROMPT]";
 const CLOSE_CREATIVE: &str = "[/CREATIVE_SYSTEM_PROMPT]";
 const OPEN_VERIFIER: &str = "[VERIFIER_SYSTEM_PROMPT]";
 const CLOSE_VERIFIER: &str = "[/VERIFIER_SYSTEM_PROMPT]";
+const OPEN_CODE_GEN: &str = "[CODE_GEN_SYSTEM_PROMPT]";
+const CLOSE_CODE_GEN: &str = "[/CODE_GEN_SYSTEM_PROMPT]";
 
 /// Load a Soul from disk (if path given) or fall back to the embedded default.
 pub fn load(path: Option<&str>) -> Result<Soul> {
@@ -42,6 +44,7 @@ fn parse(raw: &str) -> Result<Soul> {
         logic_system_prompt: extract(raw, OPEN_LOGIC, CLOSE_LOGIC)?,
         creative_system_prompt: extract(raw, OPEN_CREATIVE, CLOSE_CREATIVE).unwrap_or_default(),
         verifier_system_prompt: extract(raw, OPEN_VERIFIER, CLOSE_VERIFIER).unwrap_or_default(),
+        code_gen_system_prompt: extract(raw, OPEN_CODE_GEN, CLOSE_CODE_GEN).unwrap_or_default(),
     })
 }
 
