@@ -46,6 +46,28 @@ pub struct Config {
     pub soul_path: String,
     pub api_key: Option<String>,
     pub verify_mode: VerifyMode,
+    pub timeout_secs: u64,
+}
+
+impl std::fmt::Display for BackendType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            BackendType::OpenAiCompat => write!(f, "openai-compat"),
+            BackendType::OllamaNative => write!(f, "ollama-native"),
+            BackendType::LocalEmbedded => write!(f, "local-embedded"),
+            BackendType::Anthropic => write!(f, "anthropic"),
+        }
+    }
+}
+
+impl std::fmt::Display for VerifyMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            VerifyMode::Deterministic => write!(f, "deterministic"),
+            VerifyMode::Llm => write!(f, "llm"),
+            VerifyMode::None => write!(f, "none"),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -9,89 +9,13 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Paragraph, Wrap},
+    widgets::{Block, Clear, Paragraph, Wrap},
     Frame, Terminal,
 };
 use serde::{Deserialize, Serialize};
-use split_brain_harness::{
-    analyze,
-    types::{BackendType, Config, HarnessResult, VerifyMode},
-};
+use split_brain_harness::{analyze, config::build_config, types::HarnessResult};
 use std::{io::stdout, time::Duration};
 use tokio::sync::mpsc;
-
-// ---------------------------------------------------------------------------
-// Config (env > config.toml > defaults — mirrors the CLI)
-// ---------------------------------------------------------------------------
-
-#[derive(Deserialize, Default)]
-struct FileConfig {
-    backend: Option<String>,
-    endpoint: Option<String>,
-    model_name: Option<String>,
-    soul_path: Option<String>,
-    api_key: Option<String>,
-    verify_mode: Option<String>,
-}
-
-fn load_file_config() -> FileConfig {
-    let path = std::env::var("SBH_CONFIG").unwrap_or_else(|_| "config.toml".to_string());
-    match std::fs::read_to_string(&path) {
-        Ok(c) => toml::from_str(&c).unwrap_or_default(),
-        Err(_) => FileConfig::default(),
-    }
-}
-
-fn parse_backend(s: &str) -> (BackendType, &'static str) {
-    match s {
-        "openai-compat" => (BackendType::OpenAiCompat, "http://localhost:8080"),
-        "anthropic" => (BackendType::Anthropic, "https://api.anthropic.com"),
-        "local-embedded" => (BackendType::LocalEmbedded, ""),
-        _ => (BackendType::OllamaNative, "http://localhost:11434"),
-    }
-}
-
-fn parse_verify_mode(s: &str) -> VerifyMode {
-    match s {
-        "llm" => VerifyMode::Llm,
-        "none" => VerifyMode::None,
-        _ => VerifyMode::Deterministic,
-    }
-}
-
-fn build_config() -> Config {
-    let file = load_file_config();
-    let backend_str = std::env::var("SBH_BACKEND")
-        .ok()
-        .or(file.backend)
-        .unwrap_or_else(|| "ollama-native".to_string());
-    let (backend, default_ep) = parse_backend(&backend_str);
-    let default_model = match &backend {
-        BackendType::Anthropic => "claude-sonnet-4-6",
-        _ => "llama3.2:3b",
-    };
-    Config {
-        backend,
-        endpoint: std::env::var("SBH_ENDPOINT")
-            .ok()
-            .or(file.endpoint)
-            .unwrap_or_else(|| default_ep.to_string()),
-        model_name: std::env::var("SBH_MODEL")
-            .ok()
-            .or(file.model_name)
-            .unwrap_or_else(|| default_model.to_string()),
-        soul_path: std::env::var("SBH_SOUL_PATH")
-            .ok()
-            .or(file.soul_path)
-            .unwrap_or_default(),
-        api_key: std::env::var("SBH_API_KEY").ok().or(file.api_key),
-        verify_mode: std::env::var("SBH_VERIFY")
-            .ok()
-            .or(file.verify_mode)
-            .map(|s| parse_verify_mode(&s))
-            .unwrap_or_default(),
-    }
-}
 
 // ---------------------------------------------------------------------------
 // App state
@@ -126,6 +50,8 @@ struct App {
     analysis_model: String,
     chat_model: String,
     ollama_endpoint: String,
+    verify_mode: String,
+    show_help: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -179,6 +105,7 @@ async fn main() -> Result<()> {
     let config = build_config();
     let chat_model = std::env::var("SBH_CHAT_MODEL").unwrap_or_else(|_| config.model_name.clone());
     let ollama_endpoint = config.endpoint.clone();
+    let verify_mode = config.verify_mode.to_string();
 
     let app = App {
         messages: Vec::new(),
@@ -189,6 +116,8 @@ async fn main() -> Result<()> {
         analysis_model: config.model_name.clone(),
         chat_model,
         ollama_endpoint,
+        verify_mode,
+        show_help: false,
     };
 
     enable_raw_mode()?;
@@ -211,7 +140,7 @@ async fn main() -> Result<()> {
 async fn run(
     terminal: &mut Terminal<CrosstermBackend<std::io::Stdout>>,
     mut app: App,
-    config: Config,
+    config: split_brain_harness::types::Config,
 ) -> Result<()> {
     let (tx, mut rx) = mpsc::channel::<AppEvent>(128);
 
@@ -253,17 +182,35 @@ async fn run(
 
         if let CEvent::Key(key) = event::read()? {
             match (key.code, key.modifiers) {
-                (KeyCode::Char('c'), KeyModifiers::CONTROL) | (KeyCode::Esc, _) => break,
+                (KeyCode::Char('c'), KeyModifiers::CONTROL) | (KeyCode::Esc, _) => {
+                    if app.show_help {
+                        app.show_help = false;
+                    } else {
+                        break;
+                    }
+                }
+
+                (KeyCode::Char('?'), _) if app.phase == Phase::Idle => {
+                    app.show_help = !app.show_help;
+                }
 
                 (KeyCode::Enter, _) if app.phase == Phase::Idle && !app.input.is_empty() => {
                     let input = std::mem::take(&mut app.input);
+                    app.show_help = false;
+
+                    // Handle /clear command
+                    if input.trim() == "/clear" {
+                        app.messages.clear();
+                        app.telemetry = None;
+                        continue;
+                    }
+
                     app.messages.push(ChatMessage {
                         role: Role::User,
                         content: input.clone(),
                     });
                     app.phase = Phase::Analyzing;
 
-                    // Chat history: only conversational turns (not system error messages)
                     let history: Vec<OllamaMessage> = app
                         .messages
                         .iter()
@@ -286,7 +233,6 @@ async fn run(
                     let endpoint = app.ollama_endpoint.clone();
 
                     tokio::spawn(async move {
-                        // Stage 1: telemetry analysis
                         match analyze(&input, &cfg).await {
                             Ok(r) => {
                                 let _ = tx2.send(AppEvent::Telemetry(Box::new(r))).await;
@@ -296,7 +242,6 @@ async fn run(
                                 return;
                             }
                         }
-                        // Stage 2: chat response
                         if let Err(e) =
                             stream_chat(tx2.clone(), endpoint, chat_model, history).await
                         {
@@ -384,6 +329,10 @@ fn ui(frame: &mut Frame, app: &App) {
 
     render_status(frame, app, root[2]);
     render_input(frame, app, root[3]);
+
+    if app.show_help {
+        render_help(frame);
+    }
 }
 
 fn render_title(frame: &mut Frame, area: Rect) {
@@ -437,7 +386,6 @@ fn render_chat(frame: &mut Frame, app: &App, area: Rect) {
         }
     }
 
-    // In-progress streaming assistant turn
     if app.phase == Phase::Streaming || !app.streaming_buf.is_empty() {
         let mut chunks = app.streaming_buf.lines();
         if let Some(first) = chunks.next() {
@@ -565,7 +513,6 @@ fn render_telemetry(frame: &mut Frame, app: &App, area: Rect) {
                 Line::from(""),
             ];
 
-            // Active context packs from trace
             let active_packs: Vec<String> = r
                 .trace
                 .iter()
@@ -588,7 +535,6 @@ fn render_telemetry(frame: &mut Frame, app: &App, area: Rect) {
                 lines.push(Line::from(""));
             }
 
-            // Consistency flags
             if !r.verification.consistency_flags.is_empty() {
                 lines.push(Line::from(Span::styled(
                     "  flags",
@@ -629,7 +575,7 @@ fn render_status(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::styled(
-                " SGAIL Labs",
+                " sbh",
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
@@ -643,6 +589,16 @@ fn render_status(frame: &mut Frame, app: &App, area: Rect) {
             Span::styled(
                 format!(" {} ", app.chat_model),
                 Style::default().fg(Color::White),
+            ),
+            Span::styled(" verify:", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!(" {} ", app.verify_mode),
+                Style::default().fg(Color::White),
+            ),
+            Span::styled(" endpoint:", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!(" {} ", app.ollama_endpoint),
+                Style::default().fg(Color::DarkGray),
             ),
             Span::styled(format!(" [{phase}]"), Style::default().fg(Color::DarkGray)),
         ])),
@@ -658,7 +614,7 @@ fn render_input(frame: &mut Frame, app: &App, area: Rect) {
         format!(" > {}", app.input)
     };
     let title = if active {
-        " Input  [esc] quit "
+        " Input  [enter] send  [?] help  [esc] quit "
     } else {
         " Input  [processing…] "
     };
@@ -673,6 +629,54 @@ fn render_input(frame: &mut Frame, app: &App, area: Rect) {
                 })),
         ),
         area,
+    );
+}
+
+fn render_help(frame: &mut Frame) {
+    let area = frame.area();
+    let w = area.width.min(44);
+    let h = 12u16;
+    let x = area.x + (area.width.saturating_sub(w)) / 2;
+    let y = area.y + (area.height.saturating_sub(h)) / 2;
+    let popup = Rect::new(x, y, w, h);
+
+    frame.render_widget(Clear, popup);
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("  Enter     ", Style::default().fg(Color::Cyan)),
+                Span::raw("send message"),
+            ]),
+            Line::from(vec![
+                Span::styled("  Backspace ", Style::default().fg(Color::Cyan)),
+                Span::raw("delete character"),
+            ]),
+            Line::from(vec![
+                Span::styled("  ?         ", Style::default().fg(Color::Cyan)),
+                Span::raw("toggle this help"),
+            ]),
+            Line::from(vec![
+                Span::styled("  Esc       ", Style::default().fg(Color::Cyan)),
+                Span::raw("close help / quit"),
+            ]),
+            Line::from(vec![
+                Span::styled("  Ctrl-C    ", Style::default().fg(Color::Cyan)),
+                Span::raw("quit"),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("  /clear    ", Style::default().fg(Color::Yellow)),
+                Span::raw("clear chat and telemetry"),
+            ]),
+            Line::from(""),
+        ])
+        .block(
+            Block::bordered()
+                .title(" Help ")
+                .border_style(Style::default().fg(Color::Cyan)),
+        ),
+        popup,
     );
 }
 

@@ -15,6 +15,7 @@ pub trait InferenceEngine: Send + Sync {
 pub fn init_engine(config: &Config) -> Box<dyn InferenceEngine> {
     let client = Client::builder()
         .pool_max_idle_per_host(10)
+        .timeout(std::time::Duration::from_secs(config.timeout_secs))
         .build()
         .unwrap_or_default();
 
