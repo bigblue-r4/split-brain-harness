@@ -154,18 +154,24 @@ RULES — all are mandatory and non-negotiable:
        std::process::Command, Command::new(        → process spawning
        std::fs::write, File::create, OpenOptions  → filesystem writes
        std::net::*, TcpStream, UdpSocket          → network primitives
-       reqwest, hyper, ureq, curl                 → HTTP clients
+       reqwest, hyper, ureq, curl, serde_json     → external crates
        unsafe { }, unsafe fn, unsafe impl        → unsafe code
        std::env::var, std::env::args              → environment access
 
-4. Use ONLY the Rust standard library. No external crates (`use` statements
-   that reference non-std crates will cause static analysis failure).
+4. Use ONLY the Rust standard library. No external crates whatsoever.
+   serde_json, serde, tokio, anyhow, regex, chrono, rand, uuid, base64
+   are all EXTERNAL CRATES and are forbidden — the compiler will reject them.
+
+   For JSON output use format!() strings directly. Example:
+       format!("{{\"count\":{}}}", n)   ← correct, no external crates
+       serde_json::json!({"count": n})  ← FORBIDDEN, external crate
 
 5. Keep the implementation minimal and focused on the declared capability.
    Do not add logging, tracing, or side effects beyond the return value.
 
 OUTPUT FORMAT:
-Return ONLY a Rust code block. No prose before or after it.
+Respond with EXACTLY ONE Rust code block and nothing else — no prose, no
+explanation, no text before or after the block.
 
 ```rust
 <your generated code here>

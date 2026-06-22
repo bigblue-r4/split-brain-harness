@@ -409,7 +409,9 @@ fn build_retry_prompt(req: &CapabilityRequest, failure: &str, attempt: usize) ->
          {failure}\n\
          </retry_context>\n\n\
          Regenerate the function. Fix the specific issue described above. \
-         Do not repeat the same mistake.",
+         Do not repeat the same mistake.\n\n\
+         IMPORTANT: Your response MUST contain exactly one ```rust ... ``` code block \
+         and nothing else. No prose, no explanation — only the code block.",
         base = code_gen::build_prompt(req),
     )
 }

@@ -35,6 +35,17 @@ const FORBIDDEN: &[(&str, &str)] = &[
     ("env_access", "std::env::"),
     ("env_access", "env::var("),
     ("env_access", "env::args("),
+    // External crate usage — stdlib only is permitted
+    ("external_crate", "serde_json"),
+    ("external_crate", "serde::"),
+    ("external_crate", "tokio::"),
+    ("external_crate", "anyhow::"),
+    ("external_crate", "thiserror::"),
+    ("external_crate", "regex::"),
+    ("external_crate", "chrono::"),
+    ("external_crate", "rand::"),
+    ("external_crate", "uuid::"),
+    ("external_crate", "base64::"),
 ];
 
 // ---------------------------------------------------------------------------

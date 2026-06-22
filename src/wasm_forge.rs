@@ -245,6 +245,12 @@ impl WasmExecutor for WasmtimeCli {
             };
         }
 
+        let start = Instant::now();
+
+        // Spawn wasmtime and feed input via stdin. We wait for the process to
+        // finish BEFORE deleting the WASM file — spawning is non-blocking so
+        // deleting first would cause a race where wasmtime tries to open a
+        // file that no longer exists.
         let spawn_result = Command::new("wasmtime")
             .arg("--")
             .arg(&tmp_wasm)
@@ -253,49 +259,54 @@ impl WasmExecutor for WasmtimeCli {
             .stderr(Stdio::piped())
             .spawn();
 
-        let start = Instant::now();
-
-        // Destroy the WASM binary before we even check the spawn result
-        let _ = std::fs::remove_file(&tmp_wasm);
-
-        match spawn_result {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => ExecuteOutcome::RuntimeNotFound,
-            Err(e) => ExecuteOutcome::RuntimeError {
-                error: format!("spawn error: {e}"),
-            },
+        let output_result = match spawn_result {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let _ = std::fs::remove_file(&tmp_wasm);
+                return ExecuteOutcome::RuntimeNotFound;
+            }
+            Err(e) => {
+                let _ = std::fs::remove_file(&tmp_wasm);
+                return ExecuteOutcome::RuntimeError {
+                    error: format!("spawn error: {e}"),
+                };
+            }
             Ok(mut child) => {
                 if let Some(mut stdin) = child.stdin.take() {
                     let _ = stdin.write_all(input.as_bytes());
                 }
+                child.wait_with_output()
+            }
+        };
 
-                match child.wait_with_output() {
-                    Err(e) => ExecuteOutcome::RuntimeError {
-                        error: format!("wait error: {e}"),
-                    },
-                    Ok(out) => {
-                        let execution_ms = start.elapsed().as_millis() as u64;
-                        let stdout = String::from_utf8_lossy(&out.stdout)
-                            .chars()
-                            .take(65_536)
-                            .collect();
-                        let exit_code = out.status.code().unwrap_or(-1);
+        // WASM binary destroyed after the process has exited and closed the fd
+        let _ = std::fs::remove_file(&tmp_wasm);
 
-                        if out.status.success() {
-                            ExecuteOutcome::Success {
-                                stdout,
-                                execution_ms,
-                            }
-                        } else {
-                            let stderr = String::from_utf8_lossy(&out.stderr)
-                                .chars()
-                                .take(1024)
-                                .collect();
-                            ExecuteOutcome::ExecutionFailed {
-                                stderr,
-                                exit_code,
-                                execution_ms,
-                            }
-                        }
+        match output_result {
+            Err(e) => ExecuteOutcome::RuntimeError {
+                error: format!("wait error: {e}"),
+            },
+            Ok(out) => {
+                let execution_ms = start.elapsed().as_millis() as u64;
+                let stdout = String::from_utf8_lossy(&out.stdout)
+                    .chars()
+                    .take(65_536)
+                    .collect();
+                let exit_code = out.status.code().unwrap_or(-1);
+
+                if out.status.success() {
+                    ExecuteOutcome::Success {
+                        stdout,
+                        execution_ms,
+                    }
+                } else {
+                    let stderr = String::from_utf8_lossy(&out.stderr)
+                        .chars()
+                        .take(1024)
+                        .collect();
+                    ExecuteOutcome::ExecutionFailed {
+                        stderr,
+                        exit_code,
+                        execution_ms,
                     }
                 }
             }
