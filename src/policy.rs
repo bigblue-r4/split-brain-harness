@@ -182,8 +182,10 @@ mod tests {
             max_tools_per_session: 2,
             ..Budget::default()
         };
-        let mut state = PolicyState::default();
-        state.tools_invoked = 2;
+        let state = PolicyState {
+            tools_invoked: 2,
+            ..PolicyState::default()
+        };
         assert!(state.budget_exceeded(&budget).is_some());
     }
 
@@ -200,8 +202,10 @@ mod tests {
             require_approval_after_failures: 2,
             ..Budget::default()
         };
-        let mut state = PolicyState::default();
-        state.consecutive_failures = 2;
+        let state = PolicyState {
+            consecutive_failures: 2,
+            ..PolicyState::default()
+        };
         let reason = state.budget_exceeded(&budget).unwrap();
         assert!(reason.contains("approval"));
     }

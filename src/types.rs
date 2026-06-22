@@ -90,6 +90,7 @@ pub struct Soul {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct AfferentTelemetry {
     pub primary_emotion: String,
     pub emotional_intensity: f32,
@@ -97,6 +98,7 @@ pub struct AfferentTelemetry {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct IntentMatrix {
     pub stated_objective: String,
     pub subtextual_motive: String,
@@ -104,6 +106,7 @@ pub struct IntentMatrix {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct CognitiveState {
     pub urgency_vector: f32,
     pub coherence_rating: f32,

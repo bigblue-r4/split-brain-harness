@@ -48,14 +48,26 @@ pub async fn verify(
                 )
             }
             Err(e) => {
+                // LLM verifier was requested but failed (network error, parse
+                // failure, empty soul prompt). Fail closed: stop_and_ask=true
+                // regardless of what the deterministic stage found.
                 traces.push(TraceEntry {
                     stage: "verify-llm".into(),
-                    claim: "LLM verifier call failed".into(),
+                    claim: "LLM verifier unavailable — result unverified".into(),
                     evidence: None,
                     passed: false,
                     note: Some(e.to_string()),
                 });
-                (vec![], vec![], vec![format!("verifier error: {e}")], None)
+                let report = VerificationReport {
+                    passed: false,
+                    consistency_flags,
+                    unsupported_claims: vec![],
+                    assumptions: vec![],
+                    unresolved: vec![format!("verifier unavailable: {e}")],
+                    confidence: 0.0,
+                    stop_and_ask: true,
+                };
+                return (report, traces);
             }
         },
         _ => (vec![], vec![], vec![], None),
@@ -159,6 +171,21 @@ fn check_consistency(t: &TelemetryResult) -> (Vec<String>, Vec<TraceEntry>) {
                 }
             }),
         ),
+        (
+            "manipulation-risk-value",
+            Box::new(|t| {
+                const VALID: &[&str] = &["low", "medium", "high"];
+                let risk = t.intent_matrix.manipulation_risk.to_lowercase();
+                if !VALID.contains(&risk.as_str()) {
+                    Some(format!(
+                        "manipulation_risk {:?} is not a recognized value (expected: low, medium, high) — treating as unknown",
+                        t.intent_matrix.manipulation_risk
+                    ))
+                } else {
+                    None
+                }
+            }),
+        ),
     ];
 
     for (name, check) in checks {
@@ -212,7 +239,8 @@ async fn run_llm_verify(
         .await
         .map_err(|e| anyhow::anyhow!("verifier inference error: {e}"))?;
 
-    let out: VerifierLLMOutput = extractor::extract(&raw).unwrap_or_default();
+    let out: VerifierLLMOutput = extractor::extract(&raw)
+        .map_err(|e| anyhow::anyhow!("verifier output parse failed: {e}"))?;
 
     let note = if out.unsupported_claims.is_empty() {
         None
@@ -424,5 +452,83 @@ mod tests {
         let confidence = derive_confidence(&t, &flags, None);
         let stop = confidence < STOP_AND_ASK_THRESHOLD || flags.len() >= 3;
         assert!(stop, "low coherence should trigger stop_and_ask");
+    }
+
+    // --- Unknown / garbage manipulation_risk ---
+
+    #[test]
+    fn unknown_manipulation_risk_is_flagged() {
+        let t = make_telemetry("neutral", 0.1, vec!["cooperative"], "", 0.1, 0.9);
+        let (flags, _) = check_consistency(&t);
+        assert!(
+            flags.iter().any(|f| f.contains("manipulation_risk")),
+            "empty manipulation_risk should fire the unknown-value check"
+        );
+    }
+
+    #[test]
+    fn garbage_manipulation_risk_is_flagged() {
+        let t = make_telemetry("neutral", 0.1, vec!["cooperative"], "HACKED", 0.1, 0.9);
+        let (flags, _) = check_consistency(&t);
+        assert!(
+            flags.iter().any(|f| f.contains("manipulation_risk")),
+            "unrecognized manipulation_risk value should be flagged"
+        );
+    }
+
+    #[test]
+    fn valid_manipulation_risk_values_not_flagged() {
+        for risk in &["low", "medium", "high"] {
+            let t = make_telemetry("neutral", 0.1, vec!["cooperative"], risk, 0.1, 0.9);
+            let (flags, _) = check_consistency(&t);
+            assert!(
+                !flags.iter().any(|f| f.contains("manipulation_risk")),
+                "valid risk '{}' should not fire the unknown-value check",
+                risk
+            );
+        }
+    }
+
+    // --- Verifier rejection paths ---
+
+    #[test]
+    fn two_consistency_flags_do_not_alone_stop() {
+        // 2 flags < threshold of 3; whether stop fires depends on confidence
+        let t = make_telemetry("anger", 0.85, vec!["adversarial"], "low", 0.8, 0.9);
+        let (flags, _) = check_consistency(&t);
+        // Should fire: emotion-intensity, adversarial-tone, urgency → 3 flags → stop
+        // (This scenario naturally produces 3+)
+        let confidence = derive_confidence(&t, &flags, None);
+        let stop = confidence < STOP_AND_ASK_THRESHOLD || flags.len() >= 3;
+        assert!(stop, "multiple flags should trigger stop");
+    }
+
+    #[test]
+    fn no_flags_high_coherence_does_not_stop() {
+        // Internally consistent benign input — should not stop
+        let t = make_telemetry("neutral", 0.1, vec!["inquisitive"], "low", 0.05, 0.95);
+        let (flags, _) = check_consistency(&t);
+        assert!(flags.is_empty());
+        let confidence = derive_confidence(&t, &flags, None);
+        let stop = confidence < STOP_AND_ASK_THRESHOLD || flags.len() >= 3;
+        assert!(!stop, "clean benign input should not stop");
+    }
+
+    #[test]
+    fn contradictory_high_risk_passes_consistency_as_internally_consistent() {
+        // high-risk + adversarial tone + high urgency is internally CONSISTENT
+        // (the verifier checks internal coherence, not absolute safety)
+        let t = make_telemetry("hostility", 0.9, vec!["adversarial"], "high", 0.9, 0.8);
+        let (flags, _) = check_consistency(&t);
+        // None of the existing checks should fire: tone vs low-risk won't fire
+        // because risk == "high", intensity vs low-risk won't fire, etc.
+        assert!(
+            !flags.iter().any(|f| f.contains("structural_tone")),
+            "adversarial tone + high risk is internally consistent"
+        );
+        assert!(
+            !flags.iter().any(|f| f.contains("emotional_intensity")),
+            "hostile emotion + high risk is internally consistent"
+        );
     }
 }

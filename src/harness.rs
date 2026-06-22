@@ -3,6 +3,7 @@ use crate::backends::InferenceEngine;
 use crate::capability::{CapabilityRequest, ModelProposalOutput};
 use crate::context_packs::ContextPack;
 use crate::extractor;
+use crate::input_validation;
 use crate::types::{
     AfferentTelemetry, CognitiveState, Config, HarnessResult, IntentMatrix, Soul, TelemetryResult,
     TraceEntry, VerificationReport,
@@ -32,6 +33,9 @@ impl<'e> Harness<'e> {
     /// If the model returns non-JSON or a refusal, a safe fallback HarnessResult is returned
     /// instead of an error. Backend connectivity failures still propagate as errors.
     pub async fn analyze(&self, input: &str) -> Result<HarnessResult> {
+        input_validation::validate_harness_input(input)
+            .map_err(|e| anyhow!("input validation failed: {e}"))?;
+
         let mut trace: Vec<TraceEntry> = vec![];
 
         let (telemetry, capability_request, propose_entries, is_fallback) =
@@ -542,6 +546,85 @@ mod tests {
         assert!(
             cr_trace.claim.contains("stream_parse_logs"),
             "trace claim must name the capability"
+        );
+    }
+
+    // --- Input validation at the harness boundary ---
+
+    #[tokio::test]
+    async fn oversized_input_is_rejected() {
+        let engine = MockEngine {
+            response: VALID_JSON.into(),
+        };
+        let config = make_config();
+        let soul = soul::load(None).unwrap();
+        let h = Harness::new(soul, &engine, &config);
+        let big = "a".repeat(crate::input_validation::MAX_HARNESS_INPUT_BYTES + 1);
+        let err = h.analyze(&big).await.unwrap_err();
+        assert!(
+            err.to_string().contains("input validation"),
+            "oversized input must be rejected before model call"
+        );
+    }
+
+    #[tokio::test]
+    async fn null_byte_in_input_is_rejected() {
+        let engine = MockEngine {
+            response: VALID_JSON.into(),
+        };
+        let config = make_config();
+        let soul = soul::load(None).unwrap();
+        let h = Harness::new(soul, &engine, &config);
+        let err = h.analyze("hello\x00world").await.unwrap_err();
+        assert!(err.to_string().contains("input validation"));
+    }
+
+    // --- Repeated calls are independent ---
+
+    #[tokio::test]
+    async fn repeated_calls_on_same_harness_are_independent() {
+        let engine = MockEngine {
+            response: VALID_JSON.into(),
+        };
+        let config = make_config();
+        let soul = soul::load(None).unwrap();
+        let h = Harness::new(soul, &engine, &config);
+
+        let r1 = h.analyze("first call").await.unwrap();
+        let r2 = h.analyze("second call").await.unwrap();
+
+        // Both should succeed with identical telemetry (same mock response)
+        assert_eq!(
+            r1.telemetry.intent_matrix.manipulation_risk,
+            r2.telemetry.intent_matrix.manipulation_risk
+        );
+        // Traces are independent — no shared state
+        assert!(!r1.trace.iter().any(|e| e.stage == "fallback"));
+        assert!(!r2.trace.iter().any(|e| e.stage == "fallback"));
+    }
+
+    // --- Backend error recovery ---
+
+    struct ErrorEngine;
+
+    #[async_trait]
+    impl InferenceEngine for ErrorEngine {
+        async fn generate(&self, _sys: &str, _prompt: &str) -> Result<String, String> {
+            Err("connection refused".into())
+        }
+    }
+
+    #[tokio::test]
+    async fn backend_error_propagates_as_err_not_panic() {
+        let config = make_config();
+        let soul = soul::load(None).unwrap();
+        let h = Harness::new(soul, &ErrorEngine, &config);
+        let result = h.analyze("hello").await;
+        assert!(result.is_err(), "backend error must propagate as Err");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("connection refused") || msg.contains("endpoint"),
+            "error should include backend context"
         );
     }
 

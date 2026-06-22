@@ -16,6 +16,7 @@ use std::time::Instant;
 use crate::capability::{
     Budget, CapabilityMemoryRecord, CapabilityRequest, ToolMetrics, ToolRunReport,
 };
+use crate::input_validation;
 use crate::policy::{self, PolicyState};
 use crate::tool_memory::CapabilityMemory;
 
@@ -60,6 +61,8 @@ pub struct Forge {
     state: PolicyState,
     registry: MockToolRegistry,
     pub memory: CapabilityMemory,
+    /// Immutable record of every decision made this session.
+    session_log: Vec<ToolRunReport>,
 }
 
 impl Forge {
@@ -69,6 +72,7 @@ impl Forge {
             state: PolicyState::default(),
             registry: MockToolRegistry::new(),
             memory: CapabilityMemory::new(),
+            session_log: vec![],
         }
     }
 
@@ -78,14 +82,40 @@ impl Forge {
             state: PolicyState::default(),
             registry: MockToolRegistry::new(),
             memory: CapabilityMemory::new(),
+            session_log: vec![],
         }
+    }
+
+    /// Immutable record of every ToolRunReport produced this session,
+    /// in order. Includes accepted and rejected requests.
+    pub fn audit(&self) -> &[ToolRunReport] {
+        &self.session_log
     }
 
     /// Process one CapabilityRequest from the model.
     ///
     /// Decision order:
-    ///   budget check → policy check → registry lookup → execute → memory update
+    ///   input validation → budget check → policy check → registry lookup
+    ///   → execute → memory update → audit log
+    ///
+    /// Every call is recorded in `self.session_log` regardless of outcome.
     pub fn handle(&mut self, req: &CapabilityRequest, input: &str) -> ToolRunReport {
+        let report = self.handle_inner(req, input);
+        self.session_log.push(report.clone());
+        report
+    }
+
+    fn handle_inner(&mut self, req: &CapabilityRequest, input: &str) -> ToolRunReport {
+        // Validate forge input — reject malformed strings before any processing
+        if let Err(e) = input_validation::validate_forge_input(input) {
+            return rejected(vec![format!("input validation: {e}")]);
+        }
+
+        // Validate capability request fields — length limits on model-supplied strings
+        if let Err(e) = input_validation::validate_capability_fields(req) {
+            return rejected(vec![format!("capability field validation: {e}")]);
+        }
+
         // Budget check — fail fast if session limits are already exhausted
         if let Some(reason) = self.state.budget_exceeded(&self.budget) {
             return rejected(vec![reason]);
@@ -97,7 +127,7 @@ impl Forge {
             return rejected(violations.into_iter().map(|v| v.detail).collect());
         }
 
-        // Registry lookup
+        // Registry lookup — explicit allowlist of known capabilities
         let mock_fn = match self.registry.get(&req.capability) {
             Some(f) => f,
             None => {
@@ -412,5 +442,131 @@ mod tests {
         let sig = CapabilityMemory::derive_signature(&clean_req("word_count"));
         let entry = forge.memory.lookup(&sig).unwrap();
         assert_eq!(entry.metrics.runs, 2);
+    }
+
+    // --- Input validation at the forge boundary ---
+
+    #[test]
+    fn forge_rejects_oversized_input() {
+        let mut forge = Forge::new();
+        let big = "x".repeat(crate::input_validation::MAX_FORGE_INPUT_BYTES + 1);
+        let report = forge.handle(&clean_req("word_count"), &big);
+        assert!(!report.accepted);
+        assert!(report.rejection_reasons[0].contains("input validation"));
+    }
+
+    #[test]
+    fn forge_rejects_null_byte_in_input() {
+        let mut forge = Forge::new();
+        let report = forge.handle(&clean_req("word_count"), "good\x00bad");
+        assert!(!report.accepted);
+        assert!(report.rejection_reasons[0].contains("input validation"));
+    }
+
+    #[test]
+    fn forge_rejects_oversized_capability_name() {
+        let mut forge = Forge::new();
+        let mut req = clean_req("word_count");
+        req.capability = "x".repeat(crate::input_validation::MAX_CAPABILITY_NAME_BYTES + 1);
+        let report = forge.handle(&req, "hello");
+        assert!(!report.accepted);
+        assert!(report.rejection_reasons[0].contains("capability field validation"));
+    }
+
+    // --- Session audit log ---
+
+    #[test]
+    fn session_log_records_all_calls() {
+        let mut forge = Forge::new();
+        forge.handle(&clean_req("word_count"), "a");
+        forge.handle(&clean_req("nonexistent"), "b");
+        assert_eq!(
+            forge.audit().len(),
+            2,
+            "both calls must appear in audit log"
+        );
+    }
+
+    #[test]
+    fn session_log_records_rejections() {
+        let mut forge = Forge::new();
+        let mut req = clean_req("word_count");
+        req.constraints.no_network = false;
+        forge.handle(&req, "input");
+        let log = forge.audit();
+        assert_eq!(log.len(), 1);
+        assert!(!log[0].accepted, "rejected call must be in audit log");
+    }
+
+    // --- Idempotent repeated calls ---
+
+    #[test]
+    fn repeated_calls_same_input_produce_same_output() {
+        let mut forge = Forge::new();
+        let r1 = forge.handle(&clean_req("word_count"), "hello world");
+        let r2 = forge.handle(&clean_req("word_count"), "hello world");
+        // Mock is deterministic — outputs should be identical
+        assert_eq!(r1.output, r2.output, "mock tools must be deterministic");
+    }
+
+    // --- Failure recovery after exception ---
+
+    #[test]
+    fn failure_recovery_bad_then_good_input() {
+        let mut forge = Forge::new();
+        // First call: json_extract with bad JSON (fails)
+        let r1 = forge.handle(&clean_req("json_extract"), "[1, 2, 3]");
+        assert!(r1.accepted, "accepted — mock ran to completion");
+        assert!(!r1.metrics.success, "but execution failed (not an object)");
+
+        // Second call: different tool succeeds — forge is not corrupted
+        let r2 = forge.handle(&clean_req("word_count"), "hello world");
+        assert!(r2.accepted);
+        assert!(
+            r2.metrics.success,
+            "word_count should succeed after json_extract failed"
+        );
+    }
+
+    // --- Shared state isolation between Forge instances ---
+
+    #[test]
+    fn two_forge_instances_do_not_share_memory() {
+        let mut forge_a = Forge::new();
+        let mut forge_b = Forge::new();
+
+        forge_a.handle(&clean_req("word_count"), "a");
+        assert_eq!(
+            forge_a.memory.len(),
+            1,
+            "forge_a should have 1 memory entry"
+        );
+        assert_eq!(
+            forge_b.memory.len(),
+            0,
+            "forge_b memory must be independent"
+        );
+    }
+
+    #[test]
+    fn two_forge_instances_do_not_share_budget() {
+        let budget = Budget {
+            max_tools_per_session: 1,
+            ..Budget::default()
+        };
+        let mut forge_a = Forge::with_budget(budget.clone());
+        let mut forge_b = Forge::with_budget(budget);
+
+        // Exhaust forge_a's budget
+        forge_a.handle(&clean_req("word_count"), "a");
+        let rejected_a = forge_a.handle(&clean_req("word_count"), "b");
+        assert!(!rejected_a.accepted, "forge_a should be exhausted");
+
+        // forge_b is unaffected
+        let ok_b = forge_b.handle(&clean_req("word_count"), "c");
+        assert!(
+            ok_b.accepted,
+            "forge_b budget must be independent of forge_a"
+        );
     }
 }

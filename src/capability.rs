@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 /// Constraints the model declares on the tool it is requesting.
 /// All fields default to the most restrictive value if absent.
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct CapabilityConstraints {
     #[serde(default = "default_true")]
     pub no_network: bool,
@@ -52,6 +53,7 @@ impl Default for CapabilityConstraints {
 ///
 /// The supervisor decides whether to fulfil the request.
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
 pub struct CapabilityRequest {
     /// Must be "capability_request" — validated after parse.
     pub kind: String,
@@ -68,7 +70,8 @@ pub struct CapabilityRequest {
 }
 
 impl CapabilityRequest {
-    /// Returns an error if the request is structurally invalid.
+    /// Returns an error if the request is structurally invalid or exceeds
+    /// field-length limits (guards against oversized strings from the model).
     pub fn validate(&self) -> Result<(), String> {
         if self.kind != "capability_request" {
             return Err(format!(
@@ -81,6 +84,34 @@ impl CapabilityRequest {
         }
         if self.reason.trim().is_empty() {
             return Err("reason must not be empty".into());
+        }
+        if self.capability.len() > crate::input_validation::MAX_CAPABILITY_NAME_BYTES {
+            return Err(format!(
+                "capability too long: {} bytes (max {})",
+                self.capability.len(),
+                crate::input_validation::MAX_CAPABILITY_NAME_BYTES
+            ));
+        }
+        if self.reason.len() > crate::input_validation::MAX_REASON_BYTES {
+            return Err(format!(
+                "reason too long: {} bytes (max {})",
+                self.reason.len(),
+                crate::input_validation::MAX_REASON_BYTES
+            ));
+        }
+        if self.input_contract.len() > crate::input_validation::MAX_CONTRACT_BYTES {
+            return Err(format!(
+                "input_contract too long: {} bytes (max {})",
+                self.input_contract.len(),
+                crate::input_validation::MAX_CONTRACT_BYTES
+            ));
+        }
+        if self.output_contract.len() > crate::input_validation::MAX_CONTRACT_BYTES {
+            return Err(format!(
+                "output_contract too long: {} bytes (max {})",
+                self.output_contract.len(),
+                crate::input_validation::MAX_CONTRACT_BYTES
+            ));
         }
         Ok(())
     }
