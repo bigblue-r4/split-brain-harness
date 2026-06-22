@@ -15,6 +15,7 @@ pub mod tool_forge;
 pub mod tool_memory;
 pub mod types;
 pub mod verifier;
+pub mod wasm_forge;
 
 use anyhow::Result;
 use types::{Config, HarnessResult};
