@@ -33,6 +33,10 @@ struct Fixture {
     #[serde(default)]
     expect_stop_and_ask: bool,
     expect_manipulation_risk: String,
+    #[serde(default)]
+    expect_capability_request: bool,
+    #[serde(default)]
+    expect_capability_name: Option<String>,
     /// Full JSON object response (well-formed model output).
     mock_response: Option<Value>,
     /// Raw string response (for refusal/malformed cases).
@@ -154,6 +158,33 @@ async fn fixture_pipeline_with_mock_engine() {
             assert!(
                 result.verification.stop_and_ask,
                 "fixture '{}': expected stop_and_ask=true",
+                f.name
+            );
+        }
+
+        if f.expect_capability_request {
+            let req = result.capability_request.as_ref().unwrap_or_else(|| {
+                panic!(
+                    "fixture '{}': expected capability_request to be present",
+                    f.name
+                )
+            });
+            assert!(
+                req.validate().is_ok(),
+                "fixture '{}': capability_request must be valid",
+                f.name
+            );
+            if let Some(ref expected_name) = f.expect_capability_name {
+                assert_eq!(
+                    &req.capability, expected_name,
+                    "fixture '{}': capability name mismatch",
+                    f.name
+                );
+            }
+        } else {
+            assert!(
+                result.capability_request.is_none(),
+                "fixture '{}': expected no capability_request, got one",
                 f.name
             );
         }

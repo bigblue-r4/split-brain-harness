@@ -1,5 +1,6 @@
 use crate::adaptor::{self, PackSelection};
 use crate::backends::InferenceEngine;
+use crate::capability::{CapabilityRequest, ModelProposalOutput};
 use crate::context_packs::ContextPack;
 use crate::extractor;
 use crate::types::{
@@ -33,7 +34,8 @@ impl<'e> Harness<'e> {
     pub async fn analyze(&self, input: &str) -> Result<HarnessResult> {
         let mut trace: Vec<TraceEntry> = vec![];
 
-        let (telemetry, propose_entries, is_fallback) = self.run_propose(input).await?;
+        let (telemetry, capability_request, propose_entries, is_fallback) =
+            self.run_propose(input).await?;
         trace.extend(propose_entries);
 
         if is_fallback {
@@ -52,6 +54,7 @@ impl<'e> Harness<'e> {
                 telemetry,
                 verification,
                 trace,
+                capability_request: None,
             });
         }
 
@@ -69,18 +72,27 @@ impl<'e> Harness<'e> {
             telemetry,
             verification,
             trace,
+            capability_request,
         })
     }
 
     // -----------------------------------------------------------------------
     // Stage 1 — propose
     //
-    // Returns (telemetry, trace_entries, is_fallback).
+    // Returns (telemetry, capability_request, trace_entries, is_fallback).
     // is_fallback=true means the model returned non-JSON; the telemetry is a safe default.
     // Backend errors still return Err.
     // -----------------------------------------------------------------------
 
-    async fn run_propose(&self, input: &str) -> Result<(TelemetryResult, Vec<TraceEntry>, bool)> {
+    async fn run_propose(
+        &self,
+        input: &str,
+    ) -> Result<(
+        TelemetryResult,
+        Option<CapabilityRequest>,
+        Vec<TraceEntry>,
+        bool,
+    )> {
         let selections = adaptor::select_packs_with_evidence(input);
         let active_packs: Vec<&'static ContextPack> = selections.iter().map(|s| s.pack).collect();
         let mut entries: Vec<TraceEntry> = vec![];
@@ -147,8 +159,11 @@ impl<'e> Harness<'e> {
             });
         }
 
-        match extractor::extract::<TelemetryResult>(&raw_response) {
-            Ok(telemetry) => {
+        match extractor::extract::<ModelProposalOutput>(&raw_response) {
+            Ok(output) => {
+                let telemetry = output.telemetry;
+                let capability_request = output.capability_request;
+
                 entries.push(TraceEntry {
                     stage: "propose".into(),
                     claim: format!(
@@ -161,7 +176,27 @@ impl<'e> Harness<'e> {
                     passed: true,
                     note: None,
                 });
-                Ok((telemetry, entries, false))
+
+                if let Some(ref req) = capability_request {
+                    let valid = req.validate().is_ok();
+                    entries.push(TraceEntry {
+                        stage: "capability_request".into(),
+                        claim: format!(
+                            "model requested capability: {} — {}",
+                            req.capability,
+                            truncate(&req.reason, 100)
+                        ),
+                        evidence: serde_json::to_string(req).ok(),
+                        passed: valid,
+                        note: if valid {
+                            None
+                        } else {
+                            Some("capability_request failed validation — ignored".into())
+                        },
+                    });
+                }
+
+                Ok((telemetry, capability_request, entries, false))
             }
             Err(e) => {
                 let truncated_raw = truncate(&raw_response, 200);
@@ -173,7 +208,7 @@ impl<'e> Harness<'e> {
                     note: None,
                 });
                 let telemetry = make_fallback_telemetry(&selections);
-                Ok((telemetry, entries, true))
+                Ok((telemetry, None, entries, true))
             }
         }
     }
@@ -450,5 +485,83 @@ mod tests {
             .find(|e| e.stage == "debug-raw")
             .expect("debug-raw trace entry should exist");
         assert!(entry.evidence.as_deref().unwrap_or("").contains("neutral"));
+    }
+
+    const VALID_JSON_WITH_CAPABILITY_REQUEST: &str = r#"{
+        "affective_telemetry": {
+            "primary_emotion": "neutral",
+            "emotional_intensity": 0.1,
+            "structural_tone": ["analytical"]
+        },
+        "intent_matrix": {
+            "stated_objective": "parse a large log file efficiently",
+            "subtextual_motive": "efficiency",
+            "manipulation_risk": "low"
+        },
+        "cognitive_state": {
+            "urgency_vector": 0.2,
+            "coherence_rating": 0.95
+        },
+        "capability_request": {
+            "kind": "capability_request",
+            "capability": "stream_parse_logs",
+            "input_contract": "UTF-8 log lines from stdin",
+            "output_contract": "JSON array of matching events",
+            "constraints": {
+                "no_network": true,
+                "read_only_input": true,
+                "max_runtime_ms": 1000,
+                "max_memory_mb": 64
+            },
+            "reason": "10GB log file exceeds what text reasoning can handle in a single context window."
+        }
+    }"#;
+
+    #[tokio::test]
+    async fn capability_request_flows_into_harness_result() {
+        let engine = MockEngine {
+            response: VALID_JSON_WITH_CAPABILITY_REQUEST.into(),
+        };
+        let config = make_config();
+        let soul = soul::load(None).unwrap();
+        let h = Harness::new(soul, &engine, &config);
+        let result = h.analyze("parse the 10GB log file").await.unwrap();
+
+        let req = result
+            .capability_request
+            .expect("capability_request must be present in HarnessResult");
+        assert_eq!(req.capability, "stream_parse_logs");
+        assert!(req.validate().is_ok());
+
+        let cr_trace = result
+            .trace
+            .iter()
+            .find(|e| e.stage == "capability_request")
+            .expect("capability_request trace entry must exist");
+        assert!(cr_trace.passed, "valid capability_request must pass");
+        assert!(
+            cr_trace.claim.contains("stream_parse_logs"),
+            "trace claim must name the capability"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_capability_request_when_absent() {
+        let engine = MockEngine {
+            response: VALID_JSON.into(),
+        };
+        let config = make_config();
+        let soul = soul::load(None).unwrap();
+        let h = Harness::new(soul, &engine, &config);
+        let result = h.analyze("write me a haiku").await.unwrap();
+
+        assert!(
+            result.capability_request.is_none(),
+            "capability_request must be None when model does not emit one"
+        );
+        assert!(
+            !result.trace.iter().any(|e| e.stage == "capability_request"),
+            "no capability_request trace entry when absent"
+        );
     }
 }

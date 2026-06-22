@@ -1,5 +1,6 @@
 pub mod adaptor;
 pub mod backends;
+pub mod capability;
 pub mod config;
 pub mod context_packs;
 pub mod extractor;

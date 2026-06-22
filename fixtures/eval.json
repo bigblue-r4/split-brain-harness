@@ -87,5 +87,43 @@
     "expect_fallback": true,
     "expect_stop_and_ask": true,
     "expect_manipulation_risk": "medium"
+  },
+  {
+    "name": "capability_request",
+    "description": "Model emits telemetry + capability_request for a large-file parsing task",
+    "input": "Parse this 10GB nginx access log and count requests by status code.",
+    "expect_packs": [],
+    "expect_manipulation_risk": "low",
+    "expect_capability_request": true,
+    "expect_capability_name": "stream_parse_logs",
+    "mock_response": {
+      "affective_telemetry": {
+        "primary_emotion": "neutral",
+        "emotional_intensity": 0.05,
+        "structural_tone": ["analytical", "cooperative"]
+      },
+      "intent_matrix": {
+        "stated_objective": "Count nginx requests by HTTP status code from a 10GB log.",
+        "subtextual_motive": "Data analysis for operational monitoring.",
+        "manipulation_risk": "low"
+      },
+      "cognitive_state": {
+        "urgency_vector": 0.1,
+        "coherence_rating": 0.98
+      },
+      "capability_request": {
+        "kind": "capability_request",
+        "capability": "stream_parse_logs",
+        "input_contract": "UTF-8 nginx access log lines from stdin",
+        "output_contract": "JSON object mapping HTTP status codes to request counts",
+        "constraints": {
+          "no_network": true,
+          "read_only_input": true,
+          "max_runtime_ms": 5000,
+          "max_memory_mb": 64
+        },
+        "reason": "10GB log file cannot be reasoned over line-by-line within a single context window. A streaming parser is required for accurate counting."
+      }
+    }
   }
 ]

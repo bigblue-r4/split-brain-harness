@@ -147,9 +147,13 @@ pub struct VerificationReport {
 }
 
 /// Full pipeline output: telemetry + verification + step-level trace.
+/// `capability_request` is `None` unless the model emitted one alongside
+/// its telemetry (Phase 1 schema — no execution in this release).
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct HarnessResult {
     pub telemetry: TelemetryResult,
     pub verification: VerificationReport,
     pub trace: Vec<TraceEntry>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub capability_request: Option<crate::capability::CapabilityRequest>,
 }
