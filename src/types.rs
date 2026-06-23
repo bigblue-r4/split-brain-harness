@@ -54,6 +54,9 @@ pub struct Config {
     /// Path to the capability memory JSON file for forge persistence.
     /// None = in-memory only (no cross-session reputation).
     pub memory_path: Option<String>,
+    /// Path to the append-only forge audit log (JSONL).
+    /// None = no audit logging.
+    pub audit_path: Option<String>,
     /// If set, `sbh serve` requires `Authorization: Bearer <serve_key>`.
     /// The serve key is NOT forwarded as the upstream API key.
     pub serve_key: Option<String>,

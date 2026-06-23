@@ -45,6 +45,7 @@ async fn main() -> Result<()> {
             max_retries,
         } => cmd_forge(&capability, &input, max_retries, &config).await,
         Command::Serve { listen } => split_brain_harness::serve::run_server(&listen, config).await,
+        Command::Audit { tail, since } => cmd_audit(&config, tail, since.as_deref()),
     }
 }
 
@@ -80,6 +81,10 @@ enum Command {
     Serve {
         listen: String,
     },
+    Audit {
+        tail: Option<usize>,
+        since: Option<String>,
+    },
 }
 
 /// Collect positional args (non-flag args), skipping values consumed by
@@ -91,6 +96,8 @@ fn positional_args(args: &[String]) -> Vec<&str> {
         "--capability",
         "--max-retries",
         "--listen",
+        "--tail",
+        "--since",
     ];
     let mut result = vec![];
     let mut skip_next = false;
@@ -127,6 +134,11 @@ fn parse_command(args: &[String]) -> Result<Command> {
     match positional.first().copied() {
         Some("doctor") => return Ok(Command::Doctor),
         Some("demo") => return Ok(Command::Demo { raw }),
+        Some("audit") => {
+            let tail = flag_value(args, "--tail").and_then(|s| s.parse().ok());
+            let since = flag_value(args, "--since");
+            return Ok(Command::Audit { tail, since });
+        }
         Some("serve") => {
             let listen =
                 flag_value(args, "--listen").unwrap_or_else(|| "127.0.0.1:8088".to_string());
@@ -485,6 +497,51 @@ async fn cmd_doctor(config: &split_brain_harness::types::Config) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
+// audit
+// ---------------------------------------------------------------------------
+
+fn cmd_audit(
+    config: &split_brain_harness::types::Config,
+    tail: Option<usize>,
+    since: Option<&str>,
+) -> Result<()> {
+    use split_brain_harness::audit;
+
+    let path = config.audit_path.as_deref().ok_or_else(|| {
+        anyhow!(
+            "no audit log configured — set SBH_AUDIT_PATH or audit_path in config.toml\n\
+             Usage: split-brain-harness audit [--tail N] [--since YYYY-MM-DD]"
+        )
+    })?;
+
+    let all = match audit::read_all(path) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            println!("forge audit: {path}  (no entries yet)");
+            return Ok(());
+        }
+        Err(e) => return Err(anyhow!("could not read audit log at {path}: {e}")),
+    };
+
+    // Apply --since filter
+    let entries: Vec<_> = if let Some(date) = since {
+        all.into_iter()
+            .filter(|e| e.timestamp.as_str() >= date)
+            .collect()
+    } else {
+        all
+    };
+
+    if let Some(n) = tail {
+        audit::print_tail(&entries, n);
+    } else {
+        audit::print_summary(path, &entries);
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // demo
 // ---------------------------------------------------------------------------
 
@@ -719,6 +776,10 @@ async fn cmd_forge(
         Box::new(WasmtimeCli),
     );
     forge.memory = saved_memory;
+    forge.audit_path = config.audit_path.clone();
+    if let Some(ref p) = config.audit_path {
+        eprintln!("forge: audit log → {p}");
+    }
 
     eprintln!(
         "forge: capability={:?} max_retries={} backend={} model={}",

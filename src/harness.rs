@@ -321,6 +321,7 @@ mod tests {
             dump_prompt: false,
             dump_raw: false,
             memory_path: None,
+            audit_path: None,
             serve_key: None,
             serve_rate_limit: 60,
             serve_max_body_bytes: 1_048_576,

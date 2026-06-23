@@ -11,6 +11,7 @@ struct FileConfig {
     verify_mode: Option<String>,
     timeout_secs: Option<u64>,
     memory_path: Option<String>,
+    audit_path: Option<String>,
     serve_key: Option<String>,
     serve_rate_limit: Option<u32>,
     serve_max_body_bytes: Option<usize>,
@@ -81,6 +82,7 @@ pub fn build_config() -> Config {
         dump_prompt: false,
         dump_raw: false,
         memory_path: std::env::var("SBH_MEMORY_PATH").ok().or(file.memory_path),
+        audit_path: std::env::var("SBH_AUDIT_PATH").ok().or(file.audit_path),
         serve_key: std::env::var("SBH_SERVE_KEY").ok().or(file.serve_key),
         serve_rate_limit: std::env::var("SBH_SERVE_RATE")
             .ok()

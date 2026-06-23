@@ -1,4 +1,5 @@
 pub mod adaptor;
+pub mod audit;
 pub mod backends;
 pub mod capability;
 pub mod code_gen;

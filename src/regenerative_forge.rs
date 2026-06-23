@@ -69,6 +69,9 @@ pub struct RegenerativeReport {
     pub total_ms: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memory_update: Option<CapabilityMemoryRecord>,
+    /// FNV-1a-64 fingerprint of the last generated source (present when generation occurred).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_fingerprint: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -86,6 +89,8 @@ pub struct RegenerativeForge<'e> {
     compiler: Box<dyn WasmCompiler>,
     executor: Box<dyn WasmExecutor>,
     session_log: Vec<RegenerativeReport>,
+    /// If set, each run is appended to this JSONL file.
+    pub audit_path: Option<String>,
 }
 
 impl<'e> RegenerativeForge<'e> {
@@ -118,6 +123,7 @@ impl<'e> RegenerativeForge<'e> {
             compiler,
             executor,
             session_log: vec![],
+            audit_path: None,
         }
     }
 
@@ -127,6 +133,26 @@ impl<'e> RegenerativeForge<'e> {
 
     pub async fn handle(&mut self, req: &CapabilityRequest, input: &str) -> RegenerativeReport {
         let report = self.handle_inner(req, input).await;
+        if let Some(ref path) = self.audit_path {
+            let entry = crate::audit::AuditEntry {
+                timestamp: crate::audit::iso_now(),
+                capability: req.capability.clone(),
+                signature: crate::tool_memory::CapabilityMemory::derive_signature(req),
+                attempt_count: report.attempts.len(),
+                tier_before: format!("{:?}", report.reputation_before.tier),
+                tier_after: format!("{:?}", report.reputation_after.tier),
+                succeeded: report.succeeded,
+                source_fingerprint: report.source_fingerprint.clone(),
+                error_summary: report
+                    .attempts
+                    .last()
+                    .and_then(|a| a.failure_reason.as_deref())
+                    .map(|s| s.chars().take(200).collect()),
+            };
+            if let Err(e) = crate::audit::append(path, &entry) {
+                eprintln!("[audit] warning: could not write to {path}: {e}");
+            }
+        }
         self.session_log.push(report.clone());
         report
     }
@@ -171,6 +197,7 @@ impl<'e> RegenerativeForge<'e> {
         let mut feedback: Option<String> = None;
         let mut succeeded = false;
         let mut final_output: Option<String> = None;
+        let mut last_source_fingerprint: Option<String> = None;
 
         for attempt_num in 1..=(self.max_retries + 1) {
             let prompt = match &feedback {
@@ -228,6 +255,7 @@ impl<'e> RegenerativeForge<'e> {
                 Some(s) => s,
             };
             record.generation_succeeded = true;
+            last_source_fingerprint = Some(crate::audit::fingerprint(source.as_bytes()));
 
             // Step 2: static analysis + tests
             let sa = crate::static_analysis::check(&source);
@@ -389,6 +417,7 @@ impl<'e> RegenerativeForge<'e> {
             reputation_after,
             total_ms,
             memory_update,
+            source_fingerprint: last_source_fingerprint,
         }
     }
 }
@@ -408,6 +437,7 @@ fn pre_rejected(reasons: Vec<String>) -> RegenerativeReport {
         reputation_after: reputation::compute_unknown(),
         total_ms: 0,
         memory_update: None,
+        source_fingerprint: None,
     }
 }
 
