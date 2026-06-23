@@ -13,6 +13,7 @@ anyhow      = "1.0"
 toml        = { version = "0.8", default-features = false, features = ["parse"] }
 ratatui     = "0.29"
 crossterm   = "0.28"
+axum        = { version = "0.7", features = ["json"] }
 
 [[bin]]
 name = "split-brain-harness"

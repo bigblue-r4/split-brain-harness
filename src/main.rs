@@ -44,6 +44,7 @@ async fn main() -> Result<()> {
             input,
             max_retries,
         } => cmd_forge(&capability, &input, max_retries, &config).await,
+        Command::Serve { listen } => split_brain_harness::serve::run_server(&listen, config).await,
     }
 }
 
@@ -76,12 +77,16 @@ enum Command {
         input: String,
         max_retries: usize,
     },
+    Serve {
+        listen: String,
+    },
 }
 
 /// Collect positional args (non-flag args), skipping values consumed by
 /// known flags like --output and --base.
 fn positional_args(args: &[String]) -> Vec<&str> {
-    const FLAGS_WITH_VALUES: &[&str] = &["--output", "--base", "--capability", "--max-retries"];
+    const FLAGS_WITH_VALUES: &[&str] =
+        &["--output", "--base", "--capability", "--max-retries", "--listen"];
     let mut result = vec![];
     let mut skip_next = false;
     for arg in &args[1..] {
@@ -117,6 +122,11 @@ fn parse_command(args: &[String]) -> Result<Command> {
     match positional.first().copied() {
         Some("doctor") => return Ok(Command::Doctor),
         Some("demo") => return Ok(Command::Demo { raw }),
+        Some("serve") => {
+            let listen = flag_value(args, "--listen")
+                .unwrap_or_else(|| "127.0.0.1:8088".to_string());
+            return Ok(Command::Serve { listen });
+        }
         Some("export-ollama") => {
             let base = flag_value(args, "--base")
                 .ok_or_else(|| anyhow!("export-ollama requires --base <model>"))?;
@@ -207,7 +217,8 @@ fn parse_command(args: &[String]) -> Result<Command> {
              Usage: split-brain-harness demo\n\
              Usage: split-brain-harness export-ollama --base <model> [--output <file>]\n\
              Usage: split-brain-harness debug-bundle [--output <file>] \"input\"\n\
-             Usage: split-brain-harness forge \"capability\" \"input\""
+             Usage: split-brain-harness forge \"capability\" \"input\"\n\
+             Usage: split-brain-harness serve [--listen <addr>]"
         ));
     }
 
@@ -849,5 +860,23 @@ mod tests {
     fn parse_forge_no_input_returns_error() {
         let a = args(&["sbh", "forge", "word count"]);
         assert!(parse_command(&a).is_err());
+    }
+
+    #[test]
+    fn parse_serve_default_listen() {
+        let a = args(&["sbh", "serve"]);
+        match parse_command(&a).unwrap() {
+            Command::Serve { listen } => assert_eq!(listen, "127.0.0.1:8088"),
+            _ => panic!("expected Serve"),
+        }
+    }
+
+    #[test]
+    fn parse_serve_custom_listen() {
+        let a = args(&["sbh", "serve", "--listen", "0.0.0.0:9000"]);
+        match parse_command(&a).unwrap() {
+            Command::Serve { listen } => assert_eq!(listen, "0.0.0.0:9000"),
+            _ => panic!("expected Serve"),
+        }
     }
 }
