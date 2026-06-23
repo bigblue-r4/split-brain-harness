@@ -14,6 +14,13 @@
 ///   - `SBH_SERVE_RATE`     — max requests/min per IP (default 60)
 ///   - `SBH_SERVE_MAX_BODY` — max body bytes (default 1 MiB)
 ///
+/// Multi-turn session tracking:
+///   Pass `x-sbh-session: <id>` on requests to link turns into a session.
+///   The response echoes the session ID. If the manipulation_risk signal shows
+///   an upward trend across turns (slow-boil escalation), the response sets
+///   `x-sbh-session-alert: escalation_detected`. Sessions expire after 30
+///   minutes of inactivity (lazy eviction on each request).
+///
 /// Start with: `sbh serve [--listen <addr>]`   default: 127.0.0.1:8088
 use std::collections::{HashMap, VecDeque};
 use std::net::{IpAddr, SocketAddr};
@@ -89,6 +96,79 @@ struct ErrorDetail {
 }
 
 // ---------------------------------------------------------------------------
+// Session tracking — multi-turn manipulation detection
+// ---------------------------------------------------------------------------
+
+const SESSION_MAX_TURNS: usize = 10;
+const SESSION_TTL: Duration = Duration::from_secs(30 * 60);
+
+/// One analyzed turn in a session, recording the risk signals.
+#[derive(Debug, Clone)]
+struct SessionTurn {
+    manipulation_risk: String,
+}
+
+/// Ring buffer of the most recent turns for one session.
+#[derive(Debug)]
+struct SessionHistory {
+    turns: VecDeque<SessionTurn>,
+    last_seen: Instant,
+}
+
+impl SessionHistory {
+    fn new() -> Self {
+        Self {
+            turns: VecDeque::new(),
+            last_seen: Instant::now(),
+        }
+    }
+
+    fn push(&mut self, risk: &str) {
+        let now = Instant::now();
+        self.last_seen = now;
+        if self.turns.len() >= SESSION_MAX_TURNS {
+            self.turns.pop_front();
+        }
+        self.turns.push_back(SessionTurn {
+            manipulation_risk: risk.to_string(),
+        });
+    }
+
+    /// Returns true when the current session shows an upward escalation in
+    /// manipulation_risk compared to the historical mean. Requires ≥3 turns.
+    ///
+    /// Algorithm: map risk to 0/1/2, compute mean of all-but-last turns.
+    /// Escalation fires when the latest turn scores above the historical mean
+    /// by more than 0.5 AND is not "low".
+    fn is_escalating(&self) -> bool {
+        if self.turns.len() < 3 {
+            return false;
+        }
+        let scores: Vec<f64> = self
+            .turns
+            .iter()
+            .map(|t| risk_score(&t.manipulation_risk))
+            .collect();
+        let n = scores.len();
+        let historical_mean: f64 = scores[..n - 1].iter().sum::<f64>() / (n - 1) as f64;
+        let current = scores[n - 1];
+        current > (historical_mean + 0.5) && current >= 1.0
+    }
+
+    fn turn_count(&self) -> usize {
+        self.turns.len()
+    }
+}
+
+fn risk_score(risk: &str) -> f64 {
+    match risk {
+        "high" => 2.0,
+        "medium" => 1.0,
+        _ => 0.0,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Server state
 // ---------------------------------------------------------------------------
 
@@ -97,6 +177,8 @@ pub struct ServeState {
     config: Arc<Config>,
     /// Per-IP sliding window: timestamps of requests in the last minute.
     rate_limiter: Arc<Mutex<HashMap<IpAddr, VecDeque<Instant>>>>,
+    /// Per-session turn history for multi-turn escalation detection.
+    sessions: Arc<Mutex<HashMap<String, SessionHistory>>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -236,6 +318,14 @@ async fn chat_completions(
         }
     }
 
+    // --- session ID: echo from client or mint a new one ---
+    let session_id = headers
+        .get("x-sbh-session")
+        .and_then(|v| v.to_str().ok())
+        .filter(|s| !s.is_empty() && s.len() <= 64)
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| format!("sbh-s-{}", monotonic_id()));
+
     // --- run the full harness pipeline ---
     let result = match analyze(user_input, &cfg).await {
         Ok(r) => r,
@@ -263,6 +353,17 @@ async fn chat_completions(
             )
                 .into_response();
         }
+    };
+
+    // --- session tracking: push turn, check for escalation, evict stale ---
+    let (session_turn_count, session_escalating) = {
+        let mut sessions = state.sessions.lock().unwrap();
+        // Lazy eviction: remove sessions silent for more than SESSION_TTL
+        let now = Instant::now();
+        sessions.retain(|_, h| now.duration_since(h.last_seen) < SESSION_TTL);
+        let hist = sessions.entry(session_id.clone()).or_insert_with(SessionHistory::new);
+        hist.push(&result.telemetry.intent_matrix.manipulation_risk);
+        (hist.turn_count(), hist.is_escalating())
     };
 
     // --- build response ---
@@ -325,6 +426,19 @@ async fn chat_completions(
     if let Ok(val) = HeaderValue::from_str(witness_status) {
         resp_headers.insert("x-sbh-witness", val);
     }
+    // Session headers
+    if let Ok(val) = HeaderValue::from_str(&session_id) {
+        resp_headers.insert("x-sbh-session", val);
+    }
+    if let Ok(val) = HeaderValue::from_str(&session_turn_count.to_string()) {
+        resp_headers.insert("x-sbh-session-turns", val);
+    }
+    if session_escalating {
+        resp_headers.insert(
+            "x-sbh-session-alert",
+            HeaderValue::from_static("escalation_detected"),
+        );
+    }
 
     (
         StatusCode::OK,
@@ -358,6 +472,7 @@ pub async fn run_server(listen: &str, config: Config) -> anyhow::Result<()> {
     let state = ServeState {
         config: Arc::new(config),
         rate_limiter: Arc::new(Mutex::new(HashMap::new())),
+        sessions: Arc::new(Mutex::new(HashMap::new())),
     };
 
     let app = Router::new()
@@ -469,6 +584,70 @@ mod tests {
         let a = monotonic_id();
         let b = monotonic_id();
         assert!(b > a);
+    }
+
+    #[test]
+    fn session_no_escalation_below_three_turns() {
+        let mut h = SessionHistory::new();
+        h.push("high");
+        h.push("high");
+        assert!(!h.is_escalating(), "need ≥3 turns before firing");
+    }
+
+    #[test]
+    fn session_escalation_detected_on_slow_boil() {
+        let mut h = SessionHistory::new();
+        h.push("low");
+        h.push("low");
+        h.push("high");
+        assert!(h.is_escalating(), "low→low→high is slow-boil escalation");
+    }
+
+    #[test]
+    fn session_no_escalation_when_already_high() {
+        let mut h = SessionHistory::new();
+        h.push("high");
+        h.push("high");
+        h.push("high");
+        // All turns already high — no upward delta
+        assert!(!h.is_escalating());
+    }
+
+    #[test]
+    fn session_no_escalation_medium_to_medium() {
+        let mut h = SessionHistory::new();
+        h.push("low");
+        h.push("medium");
+        h.push("medium");
+        // medium is 1.0; historical mean 0.5 → delta 0.5, but not > 0.5
+        assert!(!h.is_escalating());
+    }
+
+    #[test]
+    fn session_escalation_low_to_high_five_turns() {
+        let mut h = SessionHistory::new();
+        for _ in 0..4 {
+            h.push("low");
+        }
+        h.push("high");
+        assert!(h.is_escalating());
+    }
+
+    #[test]
+    fn session_ring_caps_at_max_turns() {
+        let mut h = SessionHistory::new();
+        for _ in 0..SESSION_MAX_TURNS + 5 {
+            h.push("low");
+        }
+        assert_eq!(h.turn_count(), SESSION_MAX_TURNS);
+    }
+
+    #[test]
+    fn risk_score_mapping() {
+        assert_eq!(risk_score("low"), 0.0);
+        assert_eq!(risk_score("medium"), 1.0);
+        assert_eq!(risk_score("high"), 2.0);
+        assert_eq!(risk_score("unknown"), 0.0);
     }
 
     #[test]
