@@ -106,7 +106,12 @@ async fn chat_completions(
                 kind: "unsupported_parameter".into(),
             },
         };
-        return (StatusCode::BAD_REQUEST, HeaderMap::new(), Json(serde_json::to_value(body).unwrap())).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            HeaderMap::new(),
+            Json(serde_json::to_value(body).unwrap()),
+        )
+            .into_response();
     }
 
     // Extract the last user message as the input to analyze
@@ -125,7 +130,12 @@ async fn chat_completions(
                 kind: "invalid_request_error".into(),
             },
         };
-        return (StatusCode::BAD_REQUEST, HeaderMap::new(), Json(serde_json::to_value(body).unwrap())).into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            HeaderMap::new(),
+            Json(serde_json::to_value(body).unwrap()),
+        )
+            .into_response();
     }
 
     // Optionally override API key from the Authorization header
@@ -159,7 +169,11 @@ async fn chat_completions(
                     kind: kind.into(),
                 },
             };
-            return (status, HeaderMap::new(), Json(serde_json::to_value(body).unwrap()))
+            return (
+                status,
+                HeaderMap::new(),
+                Json(serde_json::to_value(body).unwrap()),
+            )
                 .into_response();
         }
     };
