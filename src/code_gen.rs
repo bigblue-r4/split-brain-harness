@@ -99,7 +99,8 @@ pub fn build_prompt(req: &CapabilityRequest) -> String {
            read_only_input: {ro}\n\
            max_runtime_ms: {rt}\n\
            max_memory_mb: {mem}\n\
-         </capability_request>",
+         </capability_request>\n\n\
+         Respond with ONLY a ```rust ... ``` code block. No prose before or after it.",
         cap = req.capability,
         inp = req.input_contract,
         out = req.output_contract,
@@ -117,18 +118,22 @@ pub fn build_prompt(req: &CapabilityRequest) -> String {
 
 /// Extract the content of the first ` ```rust ... ``` ` block in `response`.
 /// Returns `None` if no such block exists or the block is empty after trimming.
+/// Accepts both `rust` and `Rust` language tags and both LF and CRLF endings.
 pub fn extract_code_block(response: &str) -> Option<String> {
-    // Try ```rust\n first, then ```rust\r\n
-    let (marker, skip) = if response.contains("```rust\n") {
+    // Normalise to LF so we only need to match one variant
+    let normalised = response.replace("\r\n", "\n");
+
+    // Accept ```rust or ```Rust
+    let (marker, skip): (&str, usize) = if normalised.contains("```rust\n") {
         ("```rust\n", "```rust\n".len())
-    } else if response.contains("```rust\r\n") {
-        ("```rust\r\n", "```rust\r\n".len())
+    } else if normalised.contains("```Rust\n") {
+        ("```Rust\n", "```Rust\n".len())
     } else {
         return None;
     };
 
-    let start = response.find(marker)? + skip;
-    let rest = &response[start..];
+    let start = normalised.find(marker)? + skip;
+    let rest = &normalised[start..];
     let end = rest.find("```")?;
     let code = rest[..end].trim().to_string();
     if code.is_empty() {

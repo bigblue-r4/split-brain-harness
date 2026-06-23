@@ -19,7 +19,7 @@ impl InferenceEngine for AnthropicEngine {
 
         let body = json!({
             "model": self.model,
-            "max_tokens": 600,
+            "max_tokens": 2048,
             "system": system_prompt,
             "messages": [
                 { "role": "user", "content": prompt_payload }

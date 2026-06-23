@@ -1,0 +1,195 @@
+{
+  "capability": "word count",
+  "input": "the quick brown fox jumps over the lazy dog",
+  "status": "PASS",
+  "succeeded": true,
+  "accepted": true,
+  "attempts": 1,
+  "output": "{\"words\":9,\"lines\":1,\"characters\":43,\"bytes\":43}",
+  "tier_after": "emerging",
+  "wall_ms": 3019,
+  "model": "claude-haiku-4-5-20251001",
+  "backend": "anthropic"
+}
+{
+  "capability": "character count",
+  "input": "hello world",
+  "status": "PASS",
+  "succeeded": true,
+  "accepted": true,
+  "attempts": 1,
+  "output": "{\"characters\":11,\"bytes\":11,\"lines\":1,\"words\":2}",
+  "tier_after": "emerging",
+  "wall_ms": 3424,
+  "model": "claude-haiku-4-5-20251001",
+  "backend": "anthropic"
+}
+{
+  "capability": "reverse string",
+  "input": "racecar",
+  "status": "PASS",
+  "succeeded": true,
+  "accepted": true,
+  "attempts": 1,
+  "output": "{\"result\":\"racecar\"}",
+  "tier_after": "emerging",
+  "wall_ms": 3010,
+  "model": "claude-haiku-4-5-20251001",
+  "backend": "anthropic"
+}
+{
+  "capability": "uppercase",
+  "input": "hello from the ephemeral tool forge",
+  "status": "PASS",
+  "succeeded": true,
+  "accepted": true,
+  "attempts": 1,
+  "output": "{\"result\":\"HELLO FROM THE EPHEMERAL TOOL FORGE\"}",
+  "tier_after": "emerging",
+  "wall_ms": 3246,
+  "model": "claude-haiku-4-5-20251001",
+  "backend": "anthropic"
+}
+{
+  "capability": "line count",
+  "input": "alpha\nbeta\ngamma\ndelta\nepsilon",
+  "status": "PASS",
+  "succeeded": true,
+  "accepted": true,
+  "attempts": 1,
+  "output": "{\"line_count\":5}",
+  "tier_after": "emerging",
+  "wall_ms": 2782,
+  "model": "claude-haiku-4-5-20251001",
+  "backend": "anthropic"
+}
+{
+  "capability": "sort lines",
+  "input": "banana\napple\ncherry\ndate\nelderberry",
+  "status": "PASS",
+  "succeeded": true,
+  "accepted": true,
+  "attempts": 1,
+  "output": "apple\nbanana\ncherry\ndate\nelderberry",
+  "tier_after": "emerging",
+  "wall_ms": 3057,
+  "model": "claude-haiku-4-5-20251001",
+  "backend": "anthropic"
+}
+{
+  "capability": "unique lines",
+  "input": "alpha\nbeta\nalpha\ngamma\nbeta\ndelta",
+  "status": "PASS",
+  "succeeded": true,
+  "accepted": true,
+  "attempts": 1,
+  "output": "{\"unique_lines\":4,\"content\":\"alpha\\nbeta\\ngamma\\ndelta\"}",
+  "tier_after": "emerging",
+  "wall_ms": 4070,
+  "model": "claude-haiku-4-5-20251001",
+  "backend": "anthropic"
+}
+{
+  "capability": "sum numbers",
+  "input": "10\n20\n30\n40\n50",
+  "status": "PASS",
+  "succeeded": true,
+  "accepted": true,
+  "attempts": 1,
+  "output": "{\"sum\":150}",
+  "tier_after": "emerging",
+  "wall_ms": 3644,
+  "model": "claude-haiku-4-5-20251001",
+  "backend": "anthropic"
+}
+{
+  "capability": "palindrome check",
+  "input": "racecar",
+  "status": "PASS",
+  "succeeded": true,
+  "accepted": true,
+  "attempts": 1,
+  "output": "{\"input\":\"racecar\",\"is_palindrome\":true,\"normalized\":\"racecar\"}",
+  "tier_after": "emerging",
+  "wall_ms": 3991,
+  "model": "claude-haiku-4-5-20251001",
+  "backend": "anthropic"
+}
+{
+  "capability": "hex dump",
+  "input": "hello",
+  "status": "PASS",
+  "succeeded": true,
+  "accepted": true,
+  "attempts": 1,
+  "output": "00000000  68 65 6c 6c 6f                                   |hello|",
+  "tier_after": "emerging",
+  "wall_ms": 4570,
+  "model": "claude-haiku-4-5-20251001",
+  "backend": "anthropic"
+}
+{
+  "capability": "rot13 encode",
+  "input": "Hello World",
+  "status": "PASS",
+  "succeeded": true,
+  "accepted": true,
+  "attempts": 1,
+  "output": "Uryyb Jbeyq",
+  "tier_after": "emerging",
+  "wall_ms": 3763,
+  "model": "claude-haiku-4-5-20251001",
+  "backend": "anthropic"
+}
+{
+  "capability": "csv column sum",
+  "input": "name,score\nalice,90\nbob,85\ncarol,92",
+  "status": "PASS",
+  "succeeded": true,
+  "accepted": true,
+  "attempts": 1,
+  "output": "{\"column_sums\":{\"name\":null,\"score\":267}}",
+  "tier_after": "emerging",
+  "wall_ms": 5907,
+  "model": "claude-haiku-4-5-20251001",
+  "backend": "anthropic"
+}
+{
+  "capability": "log line filter",
+  "input": "2024-01-01 INFO started\n2024-01-01 ERROR crash\n2024-01-01 INFO done",
+  "status": "PASS",
+  "succeeded": true,
+  "accepted": true,
+  "attempts": 2,
+  "output": "{\"filtered_lines\":[\"2024-01-01 INFO started\",\"2024-01-01 ERROR crash\",\"2024-01-01 INFO done\"],\"count\":3}",
+  "tier_after": "emerging",
+  "wall_ms": 14008,
+  "model": "claude-haiku-4-5-20251001",
+  "backend": "anthropic"
+}
+{
+  "capability": "count vowels",
+  "input": "the quick brown fox",
+  "status": "PASS",
+  "succeeded": true,
+  "accepted": true,
+  "attempts": 1,
+  "output": "{\"vowel_count\":5}",
+  "tier_after": "emerging",
+  "wall_ms": 2861,
+  "model": "claude-haiku-4-5-20251001",
+  "backend": "anthropic"
+}
+{
+  "capability": "title case",
+  "input": "the quick brown fox jumps",
+  "status": "PASS",
+  "succeeded": true,
+  "accepted": true,
+  "attempts": 1,
+  "output": "The Quick Brown Fox Jumps",
+  "tier_after": "emerging",
+  "wall_ms": 3740,
+  "model": "claude-haiku-4-5-20251001",
+  "backend": "anthropic"
+}

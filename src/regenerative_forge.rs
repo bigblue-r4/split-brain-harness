@@ -206,6 +206,11 @@ impl<'e> RegenerativeForge<'e> {
 
             let source = match code_gen::extract_code_block(&raw) {
                 None => {
+                    // Log first 300 chars of the raw response to stderr so
+                    // operators can see what the model returned instead of a
+                    // code block (diagnostic aid — not sensitive data).
+                    let preview: String = raw.chars().take(120).collect();
+                    eprintln!("[forge] attempt {attempt_num} — no code block (raw {} chars): {preview:?}", raw.len());
                     let reason = "model did not return a Rust code block".into();
                     record.failure_reason = Some(reason);
                     attempts.push(record);

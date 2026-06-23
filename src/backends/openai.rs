@@ -19,7 +19,7 @@ impl InferenceEngine for OpenAiEngine {
                 { "role": "user",   "content": prompt_payload }
             ],
             "temperature": 0.1,
-            "max_tokens":  600
+            "max_tokens": 2048
         });
 
         let resp = self
