@@ -44,7 +44,12 @@ async fn main() -> Result<()> {
             input,
             max_retries,
         } => cmd_forge(&capability, &input, max_retries, &config).await,
-        Command::Serve { listen } => split_brain_harness::serve::run_server(&listen, config).await,
+        Command::Serve { listen, session_log } => {
+            if let Some(p) = session_log {
+                config.session_log_path = Some(p);
+            }
+            split_brain_harness::serve::run_server(&listen, config).await
+        }
         Command::Audit { tail, since } => cmd_audit(&config, tail, since.as_deref()),
     }
 }
@@ -80,6 +85,7 @@ enum Command {
     },
     Serve {
         listen: String,
+        session_log: Option<String>,
     },
     Audit {
         tail: Option<usize>,
@@ -98,6 +104,7 @@ fn positional_args(args: &[String]) -> Vec<&str> {
         "--listen",
         "--tail",
         "--since",
+        "--session-log",
     ];
     let mut result = vec![];
     let mut skip_next = false;
@@ -142,7 +149,8 @@ fn parse_command(args: &[String]) -> Result<Command> {
         Some("serve") => {
             let listen =
                 flag_value(args, "--listen").unwrap_or_else(|| "127.0.0.1:8088".to_string());
-            return Ok(Command::Serve { listen });
+            let session_log = flag_value(args, "--session-log");
+            return Ok(Command::Serve { listen, session_log });
         }
         Some("export-ollama") => {
             let base = flag_value(args, "--base")
@@ -235,7 +243,7 @@ fn parse_command(args: &[String]) -> Result<Command> {
              Usage: split-brain-harness export-ollama --base <model> [--output <file>]\n\
              Usage: split-brain-harness debug-bundle [--output <file>] \"input\"\n\
              Usage: split-brain-harness forge \"capability\" \"input\"\n\
-             Usage: split-brain-harness serve [--listen <addr>]"
+             Usage: split-brain-harness serve [--listen <addr>] [--session-log <path>]"
         ));
     }
 
@@ -509,7 +517,19 @@ async fn cmd_doctor(config: &split_brain_harness::types::Config) -> Result<()> {
         println!("witness:  not running (run 'witness start' for cryptographic forge witnessing)");
     }
     let sbh_audit = config.audit_path.as_deref().unwrap_or("—");
-    println!("sbh→witness feed: {sbh_audit}");
+    println!("forge audit → witness: {sbh_audit}");
+    match config.session_log_path.as_deref() {
+        None => println!(
+            "session log → witness: disabled  \
+             (set SBH_SESSION_LOG or --session-log to enable escalation logging)"
+        ),
+        Some(p) => {
+            let count = split_brain_harness::session_log::read_all(p)
+                .map(|v| v.len())
+                .unwrap_or(0);
+            println!("session log → witness: {p}  ({count} escalation events)");
+        }
+    }
 
     Ok(())
 }
@@ -1045,7 +1065,10 @@ mod tests {
     fn parse_serve_default_listen() {
         let a = args(&["sbh", "serve"]);
         match parse_command(&a).unwrap() {
-            Command::Serve { listen } => assert_eq!(listen, "127.0.0.1:8088"),
+            Command::Serve { listen, session_log } => {
+                assert_eq!(listen, "127.0.0.1:8088");
+                assert!(session_log.is_none());
+            }
             _ => panic!("expected Serve"),
         }
     }
@@ -1054,7 +1077,18 @@ mod tests {
     fn parse_serve_custom_listen() {
         let a = args(&["sbh", "serve", "--listen", "0.0.0.0:9000"]);
         match parse_command(&a).unwrap() {
-            Command::Serve { listen } => assert_eq!(listen, "0.0.0.0:9000"),
+            Command::Serve { listen, .. } => assert_eq!(listen, "0.0.0.0:9000"),
+            _ => panic!("expected Serve"),
+        }
+    }
+
+    #[test]
+    fn parse_serve_session_log_flag() {
+        let a = args(&["sbh", "serve", "--session-log", "/tmp/sessions.jsonl"]);
+        match parse_command(&a).unwrap() {
+            Command::Serve { session_log, .. } => {
+                assert_eq!(session_log.as_deref(), Some("/tmp/sessions.jsonl"));
+            }
             _ => panic!("expected Serve"),
         }
     }

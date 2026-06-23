@@ -36,7 +36,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{analyze, types::Config};
+use crate::{analyze, session_log, types::Config};
 
 // ---------------------------------------------------------------------------
 // Request / response types (OpenAI wire format subset)
@@ -158,6 +158,27 @@ impl SessionHistory {
     fn turn_count(&self) -> usize {
         self.turns.len()
     }
+
+    /// Returns (trajectory, historical_mean) — the same values used by
+    /// `is_escalating`, exposed so the caller can write a session log entry.
+    fn risk_summary(&self) -> (Vec<String>, f64) {
+        let trajectory: Vec<String> = self
+            .turns
+            .iter()
+            .map(|t| t.manipulation_risk.clone())
+            .collect();
+        let n = trajectory.len();
+        if n < 2 {
+            return (trajectory, 0.0);
+        }
+        let scores: Vec<f64> = self
+            .turns
+            .iter()
+            .map(|t| risk_score(&t.manipulation_risk))
+            .collect();
+        let historical_mean = scores[..n - 1].iter().sum::<f64>() / (n - 1) as f64;
+        (trajectory, historical_mean)
+    }
 }
 
 fn risk_score(risk: &str) -> f64 {
@@ -179,6 +200,8 @@ pub struct ServeState {
     rate_limiter: Arc<Mutex<HashMap<IpAddr, VecDeque<Instant>>>>,
     /// Per-session turn history for multi-turn escalation detection.
     sessions: Arc<Mutex<HashMap<String, SessionHistory>>>,
+    /// Path to append-only session escalation log. Written on every escalation event.
+    session_log_path: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -356,15 +379,39 @@ async fn chat_completions(
     };
 
     // --- session tracking: push turn, check for escalation, evict stale ---
-    let (session_turn_count, session_escalating) = {
+    let (session_turn_count, session_escalating, session_log_info) = {
         let mut sessions = state.sessions.lock().unwrap();
-        // Lazy eviction: remove sessions silent for more than SESSION_TTL
         let now = Instant::now();
         sessions.retain(|_, h| now.duration_since(h.last_seen) < SESSION_TTL);
         let hist = sessions.entry(session_id.clone()).or_insert_with(SessionHistory::new);
         hist.push(&result.telemetry.intent_matrix.manipulation_risk);
-        (hist.turn_count(), hist.is_escalating())
+        let escalating = hist.is_escalating();
+        let summary = if escalating {
+            Some(hist.risk_summary())
+        } else {
+            None
+        };
+        (hist.turn_count(), escalating, summary)
     };
+
+    // --- write session log entry on escalation ---
+    if session_escalating {
+        if let (Some(ref log_path), Some((trajectory, historical_mean))) =
+            (&state.session_log_path, session_log_info)
+        {
+            let entry = session_log::SessionLogEntry::new(
+                session_id.clone(),
+                session_turn_count,
+                trajectory,
+                historical_mean,
+                &ip,
+                user_input,
+            );
+            if let Err(e) = session_log::append(log_path, &entry) {
+                eprintln!("sbh serve: session log write error: {e}");
+            }
+        }
+    }
 
     // --- build response ---
     let telemetry_json = serde_json::to_string(&result).unwrap_or_else(|_| "{}".into());
@@ -468,11 +515,13 @@ pub async fn run_server(listen: &str, config: Config) -> anyhow::Result<()> {
     let rate_limit = config.serve_rate_limit;
     let max_body = config.serve_max_body_bytes;
     let auth_enabled = config.serve_key.is_some();
+    let session_log_path = config.session_log_path.clone();
 
     let state = ServeState {
         config: Arc::new(config),
         rate_limiter: Arc::new(Mutex::new(HashMap::new())),
         sessions: Arc::new(Mutex::new(HashMap::new())),
+        session_log_path: session_log_path.clone(),
     };
 
     let app = Router::new()
@@ -492,6 +541,10 @@ pub async fn run_server(listen: &str, config: Config) -> anyhow::Result<()> {
         rate_limit,
         max_body,
     );
+    match &session_log_path {
+        Some(p) => eprintln!("  session log: {p}"),
+        None => eprintln!("  session log: disabled (set SBH_SESSION_LOG or --session-log)"),
+    };
 
     axum::serve(
         listener,

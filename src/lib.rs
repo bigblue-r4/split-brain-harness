@@ -13,6 +13,7 @@ pub mod policy;
 pub mod regenerative_forge;
 pub mod reputation;
 pub mod serve;
+pub mod session_log;
 pub mod soul;
 pub mod static_analysis;
 pub mod tool_forge;

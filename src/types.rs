@@ -64,6 +64,10 @@ pub struct Config {
     pub serve_rate_limit: u32,
     /// Max request body size in bytes for `sbh serve`. Default 1 MiB.
     pub serve_max_body_bytes: usize,
+    /// Path to the append-only session escalation log (JSONL).
+    /// Written on every slow-boil escalation event detected by `sbh serve`.
+    /// None = events are not persisted.
+    pub session_log_path: Option<String>,
 }
 
 impl std::fmt::Display for BackendType {
