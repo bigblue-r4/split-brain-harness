@@ -24,6 +24,7 @@
 /// Start with: `sbh serve [--listen <addr>]`   default: 127.0.0.1:8088
 use std::collections::{HashMap, VecDeque};
 use std::net::{IpAddr, SocketAddr};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -31,7 +32,7 @@ use axum::{
     extract::{ConnectInfo, DefaultBodyLimit, State},
     http::{HeaderMap, HeaderValue, StatusCode},
     response::IntoResponse,
-    routing::post,
+    routing::{get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -190,6 +191,46 @@ fn risk_score(risk: &str) -> f64 {
 }
 
 // ---------------------------------------------------------------------------
+// Metrics — lock-free counters, Prometheus text exposition
+// ---------------------------------------------------------------------------
+
+#[derive(Default)]
+pub struct Metrics {
+    pub requests_total: AtomicU64,
+    pub requests_ok_total: AtomicU64,
+    pub requests_error_total: AtomicU64,
+    pub auth_failures_total: AtomicU64,
+    pub rate_limit_total: AtomicU64,
+    pub escalations_total: AtomicU64,
+}
+
+impl Metrics {
+    fn inc(counter: &AtomicU64) {
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn render(&self, active_sessions: usize, uptime_secs: u64) -> String {
+        let mut out = String::with_capacity(512);
+        let pairs: &[(&str, &str, &str, u64)] = &[
+            ("sbh_requests_total",       "counter", "Total POST /v1/chat/completions requests",        self.requests_total.load(Ordering::Relaxed)),
+            ("sbh_requests_ok_total",    "counter", "Requests that returned 200 OK",                   self.requests_ok_total.load(Ordering::Relaxed)),
+            ("sbh_requests_error_total", "counter", "Requests that returned 4xx or 5xx",               self.requests_error_total.load(Ordering::Relaxed)),
+            ("sbh_auth_failures_total",  "counter", "Requests rejected for missing/invalid auth key",  self.auth_failures_total.load(Ordering::Relaxed)),
+            ("sbh_rate_limit_total",     "counter", "Requests rejected by per-IP rate limiter",        self.rate_limit_total.load(Ordering::Relaxed)),
+            ("sbh_escalations_total",    "counter", "Slow-boil session escalation events detected",    self.escalations_total.load(Ordering::Relaxed)),
+            ("sbh_active_sessions",      "gauge",   "Sessions currently held in memory",               active_sessions as u64),
+            ("sbh_uptime_seconds",       "gauge",   "Seconds since sbh serve started",                 uptime_secs),
+        ];
+        for (name, kind, help, value) in pairs {
+            out.push_str(&format!("# HELP {name} {help}\n"));
+            out.push_str(&format!("# TYPE {name} {kind}\n"));
+            out.push_str(&format!("{name} {value}\n"));
+        }
+        out
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Server state
 // ---------------------------------------------------------------------------
 
@@ -202,6 +243,10 @@ pub struct ServeState {
     sessions: Arc<Mutex<HashMap<String, SessionHistory>>>,
     /// Path to append-only session escalation log. Written on every escalation event.
     session_log_path: Option<String>,
+    /// Prometheus-style counters, shared across handler clones.
+    metrics: Arc<Metrics>,
+    /// Timestamp of server start, used to compute uptime.
+    start_time: Arc<Instant>,
 }
 
 // ---------------------------------------------------------------------------
@@ -242,6 +287,7 @@ async fn chat_completions(
     Json(req): Json<ChatRequest>,
 ) -> impl IntoResponse {
     let config = &*state.config;
+    Metrics::inc(&state.metrics.requests_total);
 
     // --- serve-level auth (checked before anything else) ---
     if let Some(sk) = &config.serve_key {
@@ -251,6 +297,8 @@ async fn chat_completions(
             .map(|s| s.trim_start_matches("Bearer ").trim().to_string())
             .unwrap_or_default();
         if &provided != sk {
+            Metrics::inc(&state.metrics.auth_failures_total);
+            Metrics::inc(&state.metrics.requests_error_total);
             let body = ErrorBody {
                 error: ErrorDetail {
                     message: "Unauthorized: invalid or missing SBH serve key.".into(),
@@ -269,6 +317,8 @@ async fn chat_completions(
     // --- per-IP rate limit ---
     let ip = remote_addr.ip();
     if !check_rate_limit(&state.rate_limiter, ip, config.serve_rate_limit) {
+        Metrics::inc(&state.metrics.rate_limit_total);
+        Metrics::inc(&state.metrics.requests_error_total);
         let body = ErrorBody {
             error: ErrorDetail {
                 message: format!(
@@ -353,6 +403,7 @@ async fn chat_completions(
     let result = match analyze(user_input, &cfg).await {
         Ok(r) => r,
         Err(e) => {
+            Metrics::inc(&state.metrics.requests_error_total);
             let msg = e.to_string();
             let (status, kind) = if msg.contains("input")
                 || msg.contains("null byte")
@@ -396,6 +447,7 @@ async fn chat_completions(
 
     // --- write session log entry on escalation ---
     if session_escalating {
+        Metrics::inc(&state.metrics.escalations_total);
         if let (Some(ref log_path), Some((trajectory, historical_mean))) =
             (&state.session_log_path, session_log_info)
         {
@@ -487,12 +539,28 @@ async fn chat_completions(
         );
     }
 
+    Metrics::inc(&state.metrics.requests_ok_total);
     (
         StatusCode::OK,
         resp_headers,
         Json(serde_json::to_value(response_body).unwrap()),
     )
         .into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Metrics endpoint — Prometheus text exposition format
+// ---------------------------------------------------------------------------
+
+async fn metrics_handler(State(state): State<ServeState>) -> impl IntoResponse {
+    let active_sessions = state.sessions.lock().unwrap().len();
+    let uptime_secs = state.start_time.elapsed().as_secs();
+    let body = state.metrics.render(active_sessions, uptime_secs);
+    (
+        StatusCode::OK,
+        [("content-type", "text/plain; version=0.0.4; charset=utf-8")],
+        body,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -522,11 +590,14 @@ pub async fn run_server(listen: &str, config: Config) -> anyhow::Result<()> {
         rate_limiter: Arc::new(Mutex::new(HashMap::new())),
         sessions: Arc::new(Mutex::new(HashMap::new())),
         session_log_path: session_log_path.clone(),
+        metrics: Arc::new(Metrics::default()),
+        start_time: Arc::new(Instant::now()),
     };
 
     let app = Router::new()
         .route("/v1/chat/completions", post(chat_completions))
-        .route("/health", axum::routing::get(health))
+        .route("/health", get(health))
+        .route("/metrics", get(metrics_handler))
         .layer(DefaultBodyLimit::max(max_body))
         .with_state(state);
 
@@ -535,6 +606,7 @@ pub async fn run_server(listen: &str, config: Config) -> anyhow::Result<()> {
     eprintln!("sbh serve: listening on http://{addr}");
     eprintln!("  POST /v1/chat/completions  — OpenAI-compatible harness proxy");
     eprintln!("  GET  /health               — liveness check");
+    eprintln!("  GET  /metrics              — Prometheus counters");
     eprintln!(
         "  auth: {}  rate: {}/min/IP  max-body: {} bytes",
         if auth_enabled { "enabled" } else { "disabled" },
@@ -610,6 +682,61 @@ fn url_encode(s: &str) -> Result<String, ()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- metrics ---
+
+    #[test]
+    fn metrics_render_contains_all_metric_names() {
+        let m = Metrics::default();
+        let out = m.render(0, 0);
+        for name in &[
+            "sbh_requests_total",
+            "sbh_requests_ok_total",
+            "sbh_requests_error_total",
+            "sbh_auth_failures_total",
+            "sbh_rate_limit_total",
+            "sbh_escalations_total",
+            "sbh_active_sessions",
+            "sbh_uptime_seconds",
+        ] {
+            assert!(out.contains(name), "missing metric: {name}");
+        }
+    }
+
+    #[test]
+    fn metrics_render_prometheus_format() {
+        let m = Metrics::default();
+        let out = m.render(3, 42);
+        assert!(out.contains("# HELP sbh_requests_total"));
+        assert!(out.contains("# TYPE sbh_requests_total counter"));
+        assert!(out.contains("sbh_requests_total 0\n"));
+        assert!(out.contains("sbh_active_sessions 3\n"));
+        assert!(out.contains("sbh_uptime_seconds 42\n"));
+    }
+
+    #[test]
+    fn metrics_counters_increment_correctly() {
+        let m = Metrics::default();
+        Metrics::inc(&m.requests_total);
+        Metrics::inc(&m.requests_total);
+        Metrics::inc(&m.escalations_total);
+        let out = m.render(0, 0);
+        assert!(out.contains("sbh_requests_total 2\n"));
+        assert!(out.contains("sbh_escalations_total 1\n"));
+        assert!(out.contains("sbh_requests_ok_total 0\n"));
+    }
+
+    #[test]
+    fn metrics_render_has_help_and_type_for_every_metric() {
+        let m = Metrics::default();
+        let out = m.render(0, 0);
+        let help_count = out.lines().filter(|l| l.starts_with("# HELP")).count();
+        let type_count = out.lines().filter(|l| l.starts_with("# TYPE")).count();
+        assert_eq!(help_count, 8, "expected 8 # HELP lines");
+        assert_eq!(type_count, 8, "expected 8 # TYPE lines");
+    }
+
+    // --- url_encode ---
 
     #[test]
     fn url_encode_spaces_and_quotes() {
