@@ -85,8 +85,13 @@ enum Command {
 /// Collect positional args (non-flag args), skipping values consumed by
 /// known flags like --output and --base.
 fn positional_args(args: &[String]) -> Vec<&str> {
-    const FLAGS_WITH_VALUES: &[&str] =
-        &["--output", "--base", "--capability", "--max-retries", "--listen"];
+    const FLAGS_WITH_VALUES: &[&str] = &[
+        "--output",
+        "--base",
+        "--capability",
+        "--max-retries",
+        "--listen",
+    ];
     let mut result = vec![];
     let mut skip_next = false;
     for arg in &args[1..] {
@@ -123,8 +128,8 @@ fn parse_command(args: &[String]) -> Result<Command> {
         Some("doctor") => return Ok(Command::Doctor),
         Some("demo") => return Ok(Command::Demo { raw }),
         Some("serve") => {
-            let listen = flag_value(args, "--listen")
-                .unwrap_or_else(|| "127.0.0.1:8088".to_string());
+            let listen =
+                flag_value(args, "--listen").unwrap_or_else(|| "127.0.0.1:8088".to_string());
             return Ok(Command::Serve { listen });
         }
         Some("export-ollama") => {
