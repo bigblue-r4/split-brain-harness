@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context as _, Result};
 use split_brain_harness::{
     analyze, backends,
     capability::{Budget, CapabilityConstraints, CapabilityRequest},
@@ -70,6 +70,9 @@ async fn main() -> Result<()> {
             split_brain_harness::serve::run_server(&listen, config).await
         }
         Command::Audit { tail, since } => cmd_audit(&config, tail, since.as_deref()),
+        Command::Bench { input, baseline, output, fail_on_regression } => {
+            cmd_bench(&config, &input, baseline.as_deref(), output.as_deref(), fail_on_regression).await
+        }
     }
 }
 
@@ -112,6 +115,12 @@ enum Command {
         tail: Option<usize>,
         since: Option<String>,
     },
+    Bench {
+        input: String,
+        baseline: Option<String>,
+        output: Option<String>,
+        fail_on_regression: bool,
+    },
 }
 
 /// Collect positional args (non-flag args), skipping values consumed by
@@ -120,6 +129,7 @@ fn positional_args(args: &[String]) -> Vec<&str> {
     const FLAGS_WITH_VALUES: &[&str] = &[
         "--output",
         "--base",
+        "--baseline",
         "--capability",
         "--max-retries",
         "--listen",
@@ -170,6 +180,22 @@ fn parse_command(args: &[String]) -> Result<Command> {
             let tail = flag_value(args, "--tail").and_then(|s| s.parse().ok());
             let since = flag_value(args, "--since");
             return Ok(Command::Audit { tail, since });
+        }
+        Some("bench") => {
+            let input = positional
+                .get(1)
+                .map(|s| s.to_string())
+                .ok_or_else(|| {
+                    anyhow!(
+                        "bench requires an input JSONL file\n\
+                         Usage: split-brain-harness bench <file.jsonl> [--baseline <prev.jsonl>] \
+                         [--output <out.jsonl>] [--fail-on-regression]"
+                    )
+                })?;
+            let baseline = flag_value(args, "--baseline");
+            let output = flag_value(args, "--output");
+            let fail_on_regression = args.contains(&"--fail-on-regression".to_string());
+            return Ok(Command::Bench { input, baseline, output, fail_on_regression });
         }
         Some("serve") => {
             let listen =
@@ -268,7 +294,8 @@ fn parse_command(args: &[String]) -> Result<Command> {
              Usage: split-brain-harness export-ollama --base <model> [--output <file>]\n\
              Usage: split-brain-harness debug-bundle [--output <file>] \"input\"\n\
              Usage: split-brain-harness forge \"capability\" \"input\"\n\
-             Usage: split-brain-harness serve [--listen <addr>] [--session-log <path>]"
+             Usage: split-brain-harness serve [--listen <addr>] [--session-log <path>]\n\
+             Usage: split-brain-harness bench <file.jsonl> [--baseline <prev.jsonl>] [--output <out.jsonl>] [--fail-on-regression]"
         ));
     }
 
@@ -625,6 +652,228 @@ fn cmd_audit(
         audit::print_summary(path, &entries);
     }
 
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// bench
+// ---------------------------------------------------------------------------
+
+fn bench_extract_text(line: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(line).ok()?;
+    // Support: {text}, {turns:[...]}, {question}, {sbh result with text}
+    if let Some(t) = v.get("text").and_then(|t| t.as_str()) {
+        return Some(t.to_string());
+    }
+    if let Some(arr) = v.get("turns").and_then(|t| t.as_array()) {
+        if let Some(first) = arr.first().and_then(|t| t.as_str()) {
+            return Some(first.to_string());
+        }
+    }
+    if let Some(q) = v.get("question").and_then(|t| t.as_str()) {
+        return Some(q.to_string());
+    }
+    None
+}
+
+fn bench_extract_risk(line: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(line).ok()?;
+    v.pointer("/sbh/telemetry/intent_matrix/manipulation_risk")
+        .and_then(|r| r.as_str())
+        .map(|s| s.to_string())
+}
+
+fn bench_risk_level(risk: &str) -> u8 {
+    match risk {
+        "low"    => 0,
+        "medium" => 1,
+        _        => 2,
+    }
+}
+
+fn bench_status(new_risk: &str, old_risk: Option<&str>) -> &'static str {
+    match old_risk {
+        None      => "new",
+        Some(old) if old == new_risk => "same",
+        Some(old) => {
+            if bench_risk_level(new_risk) > bench_risk_level(old) {
+                "regressed"
+            } else {
+                "fixed"
+            }
+        }
+    }
+}
+
+async fn cmd_bench(
+    config: &split_brain_harness::types::Config,
+    input_path: &str,
+    baseline_path: Option<&str>,
+    output_path: Option<&str>,
+    fail_on_regression: bool,
+) -> Result<()> {
+    use split_brain_harness::analyze;
+    use std::io::Write;
+
+    let no_color = std::env::var("NO_COLOR").is_ok();
+    let red    = if no_color { "" } else { "\x1b[31m" };
+    let green  = if no_color { "" } else { "\x1b[32m" };
+    let yellow = if no_color { "" } else { "\x1b[33m" };
+    let reset  = if no_color { "" } else { "\x1b[0m" };
+    let dim    = if no_color { "" } else { "\x1b[2m" };
+
+    // Load input lines
+    let input_raw = std::fs::read_to_string(input_path)
+        .with_context(|| format!("cannot read bench input: {input_path}"))?;
+    let input_lines: Vec<&str> = input_raw.lines().filter(|l| !l.trim().is_empty()).collect();
+
+    // Load baseline risks (by index)
+    let baseline_risks: Vec<Option<String>> = if let Some(bp) = baseline_path {
+        let raw = std::fs::read_to_string(bp)
+            .with_context(|| format!("cannot read baseline: {bp}"))?;
+        raw.lines()
+            .filter(|l| !l.trim().is_empty())
+            .map(bench_extract_risk)
+            .collect()
+    } else {
+        vec![]
+    };
+
+    let total = input_lines.len();
+    eprintln!("sbh bench: {total} inputs  baseline: {}",
+        baseline_path.unwrap_or("none"));
+
+    // Output file writer
+    let mut out_file: Option<std::fs::File> = if let Some(p) = output_path {
+        Some(std::fs::File::create(p)
+            .with_context(|| format!("cannot create output file: {p}"))?)
+    } else {
+        None
+    };
+
+    let mut n_low = 0u32;
+    let mut n_med = 0u32;
+    let mut n_high = 0u32;
+    let mut n_fixed = 0u32;
+    let mut n_regressed = 0u32;
+    let mut n_error = 0u32;
+    let mut regressions: Vec<String> = vec![];
+
+    for (i, line) in input_lines.iter().enumerate() {
+        let text = match bench_extract_text(line) {
+            Some(t) => t,
+            None => {
+                eprintln!("  [{:>3}/{}] {yellow}SKIP{reset}  line {} has no extractable text",
+                    i + 1, total, i + 1);
+                n_error += 1;
+                continue;
+            }
+        };
+        let baseline_risk = baseline_risks.get(i).and_then(|r| r.as_deref());
+
+        let t0 = std::time::Instant::now();
+        match analyze(&text, config).await {
+            Ok(result) => {
+                let elapsed = t0.elapsed().as_secs_f32();
+                let risk = &result.telemetry.intent_matrix.manipulation_risk;
+                let status = bench_status(risk, baseline_risk);
+                let flags = &result.verification.consistency_flags;
+
+                match risk.as_str() {
+                    "low"    => n_low  += 1,
+                    "medium" => n_med  += 1,
+                    _        => n_high += 1,
+                }
+
+                let risk_col = match risk.as_str() {
+                    "high"   => red,
+                    "medium" => yellow,
+                    _        => green,
+                };
+
+                let (status_col, status_label) = match status {
+                    "regressed" => { n_regressed += 1; regressions.push(format!("[{}] {}", risk, &text[..80.min(text.len())])); (red,    "REGRESSED") }
+                    "fixed"     => { n_fixed += 1;                                                                               (green,  "fixed    ") }
+                    "same"      => {                                                                                              (dim,    "same     ") }
+                    _           => {                                                                                              ("",     "new      ") }
+                };
+
+                let baseline_note = if let Some(br) = baseline_risk {
+                    format!("  (was {br})")
+                } else {
+                    String::new()
+                };
+
+                eprintln!(
+                    "  [{:>3}/{}] {status_col}{status_label}{reset}  {risk_col}{risk:<6}{reset}  {:.1}s  {}{}",
+                    i + 1, total, elapsed,
+                    &text[..70.min(text.len())],
+                    baseline_note,
+                );
+                for flag in flags {
+                    eprintln!("             {yellow}⚑ {flag}{reset}");
+                }
+
+                // Write output line
+                if let Some(ref mut f) = out_file {
+                    let entry = serde_json::json!({
+                        "index": i,
+                        "text": text,
+                        "risk": risk,
+                        "baseline_risk": baseline_risk,
+                        "status": status,
+                        "flags": flags,
+                        "elapsed_s": (elapsed * 10.0).round() / 10.0,
+                    });
+                    writeln!(f, "{}", entry)?;
+                }
+            }
+            Err(e) => {
+                let elapsed = t0.elapsed().as_secs_f32();
+                n_error += 1;
+                eprintln!("  [{:>3}/{}] {yellow}ERROR{reset}  {:.1}s  {}", i + 1, total, elapsed, e);
+                if let Some(ref mut f) = out_file {
+                    let entry = serde_json::json!({
+                        "index": i,
+                        "text": text,
+                        "risk": null,
+                        "baseline_risk": baseline_risk,
+                        "status": "error",
+                        "error": e.to_string(),
+                        "elapsed_s": (elapsed * 10.0).round() / 10.0,
+                    });
+                    writeln!(f, "{}", entry)?;
+                }
+            }
+        }
+    }
+
+    // Summary
+    let bar = "─".repeat(50);
+    eprintln!();
+    eprintln!("  {}", "━".repeat(50));
+    eprintln!("  Bench Summary");
+    eprintln!("  {bar}");
+    eprintln!("  {} inputs  |  {} low  |  {} medium  |  {} high  |  {} errors",
+        total, n_low, n_med, n_high, n_error);
+    if baseline_path.is_some() {
+        eprintln!("  {green}fixed: {n_fixed}{reset}   {red}regressed: {n_regressed}{reset}");
+    }
+    if !regressions.is_empty() {
+        eprintln!();
+        eprintln!("  {red}Regressions:{reset}");
+        for r in &regressions {
+            eprintln!("    {red}{r}{reset}");
+        }
+    }
+    if let Some(p) = output_path {
+        eprintln!("  output: {p}");
+    }
+    eprintln!("  {}", "━".repeat(50));
+
+    if fail_on_regression && n_regressed > 0 {
+        anyhow::bail!("bench: {n_regressed} regression(s) detected — exiting with error");
+    }
     Ok(())
 }
 
@@ -1459,5 +1708,98 @@ mod tests {
             }
             _ => panic!("expected Serve"),
         }
+    }
+
+    #[test]
+    fn parse_bench_input_only() {
+        let a = args(&["sbh", "bench", "fixtures/mt_bench_questions.jsonl"]);
+        match parse_command(&a).unwrap() {
+            Command::Bench { input, baseline, output, fail_on_regression } => {
+                assert_eq!(input, "fixtures/mt_bench_questions.jsonl");
+                assert!(baseline.is_none());
+                assert!(output.is_none());
+                assert!(!fail_on_regression);
+            }
+            _ => panic!("expected Bench"),
+        }
+    }
+
+    #[test]
+    fn parse_bench_with_baseline_and_output() {
+        let a = args(&["sbh", "bench", "questions.jsonl",
+            "--baseline", "baseline.jsonl", "--output", "out.jsonl"]);
+        match parse_command(&a).unwrap() {
+            Command::Bench { input, baseline, output, .. } => {
+                assert_eq!(input, "questions.jsonl");
+                assert_eq!(baseline.as_deref(), Some("baseline.jsonl"));
+                assert_eq!(output.as_deref(), Some("out.jsonl"));
+            }
+            _ => panic!("expected Bench"),
+        }
+    }
+
+    #[test]
+    fn parse_bench_fail_on_regression_flag() {
+        let a = args(&["sbh", "bench", "q.jsonl", "--fail-on-regression"]);
+        match parse_command(&a).unwrap() {
+            Command::Bench { fail_on_regression, .. } => assert!(fail_on_regression),
+            _ => panic!("expected Bench"),
+        }
+    }
+
+    #[test]
+    fn parse_bench_no_input_returns_error() {
+        let a = args(&["sbh", "bench"]);
+        assert!(parse_command(&a).is_err(), "bench with no input must error");
+    }
+
+    #[test]
+    fn bench_extract_text_from_text_field() {
+        let line = r#"{"text": "hello world"}"#;
+        assert_eq!(bench_extract_text(line), Some("hello world".into()));
+    }
+
+    #[test]
+    fn bench_extract_text_from_turns() {
+        let line = r#"{"turns": ["first turn", "second turn"]}"#;
+        assert_eq!(bench_extract_text(line), Some("first turn".into()));
+    }
+
+    #[test]
+    fn bench_extract_text_from_question() {
+        let line = r#"{"question": "what is 2+2?"}"#;
+        assert_eq!(bench_extract_text(line), Some("what is 2+2?".into()));
+    }
+
+    #[test]
+    fn bench_extract_text_returns_none_on_no_match() {
+        let line = r#"{"something_else": "irrelevant"}"#;
+        assert_eq!(bench_extract_text(line), None);
+    }
+
+    #[test]
+    fn bench_status_same() {
+        assert_eq!(bench_status("low",    Some("low")),    "same");
+        assert_eq!(bench_status("medium", Some("medium")), "same");
+        assert_eq!(bench_status("high",   Some("high")),   "same");
+    }
+
+    #[test]
+    fn bench_status_regressed() {
+        assert_eq!(bench_status("medium", Some("low")),    "regressed");
+        assert_eq!(bench_status("high",   Some("low")),    "regressed");
+        assert_eq!(bench_status("high",   Some("medium")), "regressed");
+    }
+
+    #[test]
+    fn bench_status_fixed() {
+        assert_eq!(bench_status("low",    Some("medium")), "fixed");
+        assert_eq!(bench_status("low",    Some("high")),   "fixed");
+        assert_eq!(bench_status("medium", Some("high")),   "fixed");
+    }
+
+    #[test]
+    fn bench_status_new_when_no_baseline() {
+        assert_eq!(bench_status("low", None), "new");
     }
 }
