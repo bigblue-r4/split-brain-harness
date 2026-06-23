@@ -9,11 +9,19 @@
 ///      `<!-- sbh-telemetry: {...} -->` HTML comment at the end.
 ///   2. The `x-sbh-telemetry` response header carries the same JSON, URL-encoded.
 ///
+/// Hardening:
+///   - `SBH_SERVE_KEY`      — require Bearer token on all requests
+///   - `SBH_SERVE_RATE`     — max requests/min per IP (default 60)
+///   - `SBH_SERVE_MAX_BODY` — max body bytes (default 1 MiB)
+///
 /// Start with: `sbh serve [--listen <addr>]`   default: 127.0.0.1:8088
-use std::sync::Arc;
+use std::collections::{HashMap, VecDeque};
+use std::net::{IpAddr, SocketAddr};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use axum::{
-    extract::State,
+    extract::{ConnectInfo, DefaultBodyLimit, State},
     http::{HeaderMap, HeaderValue, StatusCode},
     response::IntoResponse,
     routing::post,
@@ -87,6 +95,35 @@ struct ErrorDetail {
 #[derive(Clone)]
 pub struct ServeState {
     config: Arc<Config>,
+    /// Per-IP sliding window: timestamps of requests in the last minute.
+    rate_limiter: Arc<Mutex<HashMap<IpAddr, VecDeque<Instant>>>>,
+}
+
+// ---------------------------------------------------------------------------
+// Rate limiter — sliding window, no extra deps
+// ---------------------------------------------------------------------------
+
+fn check_rate_limit(
+    limiter: &Arc<Mutex<HashMap<IpAddr, VecDeque<Instant>>>>,
+    ip: IpAddr,
+    max_per_minute: u32,
+) -> bool {
+    let now = Instant::now();
+    let window = Duration::from_secs(60);
+    let mut map = limiter.lock().unwrap();
+    let queue = map.entry(ip).or_default();
+    while let Some(&front) = queue.front() {
+        if now.duration_since(front) > window {
+            queue.pop_front();
+        } else {
+            break;
+        }
+    }
+    if queue.len() >= max_per_minute as usize {
+        return false;
+    }
+    queue.push_back(now);
+    true
 }
 
 // ---------------------------------------------------------------------------
@@ -95,10 +132,56 @@ pub struct ServeState {
 
 async fn chat_completions(
     State(state): State<ServeState>,
+    ConnectInfo(remote_addr): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(req): Json<ChatRequest>,
 ) -> impl IntoResponse {
-    // Streaming is not supported — return a clear error
+    let config = &*state.config;
+
+    // --- serve-level auth (checked before anything else) ---
+    if let Some(sk) = &config.serve_key {
+        let provided = headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.trim_start_matches("Bearer ").trim().to_string())
+            .unwrap_or_default();
+        if &provided != sk {
+            let body = ErrorBody {
+                error: ErrorDetail {
+                    message: "Unauthorized: invalid or missing SBH serve key.".into(),
+                    kind: "authentication_error".into(),
+                },
+            };
+            return (
+                StatusCode::UNAUTHORIZED,
+                HeaderMap::new(),
+                Json(serde_json::to_value(body).unwrap()),
+            )
+                .into_response();
+        }
+    }
+
+    // --- per-IP rate limit ---
+    let ip = remote_addr.ip();
+    if !check_rate_limit(&state.rate_limiter, ip, config.serve_rate_limit) {
+        let body = ErrorBody {
+            error: ErrorDetail {
+                message: format!(
+                    "Rate limit exceeded: max {} requests/min per IP.",
+                    config.serve_rate_limit
+                ),
+                kind: "rate_limit_error".into(),
+            },
+        };
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            HeaderMap::new(),
+            Json(serde_json::to_value(body).unwrap()),
+        )
+            .into_response();
+    }
+
+    // --- streaming not supported ---
     if req.stream {
         let body = ErrorBody {
             error: ErrorDetail {
@@ -114,7 +197,7 @@ async fn chat_completions(
             .into_response();
     }
 
-    // Extract the last user message as the input to analyze
+    // --- extract last user message ---
     let user_input = req
         .messages
         .iter()
@@ -138,19 +221,23 @@ async fn chat_completions(
             .into_response();
     }
 
-    // Optionally override API key from the Authorization header
-    let mut config = (*state.config).clone();
-    if let Some(auth) = headers.get("authorization") {
-        if let Ok(val) = auth.to_str() {
-            let key = val.trim_start_matches("Bearer ").trim().to_string();
-            if !key.is_empty() {
-                config.api_key = Some(key);
+    // --- optionally forward Authorization as upstream API key
+    //     (only when serve_key is NOT set — when serve_key is set, auth is
+    //      used for access control and must not leak to the upstream) ---
+    let mut cfg = (*state.config).clone();
+    if config.serve_key.is_none() {
+        if let Some(auth) = headers.get("authorization") {
+            if let Ok(val) = auth.to_str() {
+                let key = val.trim_start_matches("Bearer ").trim().to_string();
+                if !key.is_empty() {
+                    cfg.api_key = Some(key);
+                }
             }
         }
     }
 
-    // Run through the full harness pipeline (input validation + propose + verify)
-    let result = match analyze(user_input, &config).await {
+    // --- run the full harness pipeline ---
+    let result = match analyze(user_input, &cfg).await {
         Ok(r) => r,
         Err(e) => {
             let msg = e.to_string();
@@ -178,22 +265,15 @@ async fn chat_completions(
         }
     };
 
-    // Serialize telemetry for embedding in the response
+    // --- build response ---
     let telemetry_json = serde_json::to_string(&result).unwrap_or_else(|_| "{}".into());
-
-    // Build content: telemetry embedded as an HTML comment so plain-text
-    // callers don't see it, but structured callers can strip and parse it.
     let content = format!(
         "{}\n\n<!-- sbh-telemetry: {} -->",
         summarize_result(&result),
         telemetry_json,
     );
 
-    let model_name = req
-        .model
-        .as_deref()
-        .unwrap_or(&config.model_name)
-        .to_string();
+    let model_name = req.model.as_deref().unwrap_or(&cfg.model_name).to_string();
 
     let response_body = ChatResponse {
         id: format!("sbh-{}", monotonic_id()),
@@ -215,14 +295,12 @@ async fn chat_completions(
         },
     };
 
-    // Attach raw telemetry as a response header (URL-encoded for safety)
     let mut resp_headers = HeaderMap::new();
     if let Ok(encoded) = url_encode(&telemetry_json) {
         if let Ok(val) = HeaderValue::from_str(&encoded) {
             resp_headers.insert("x-sbh-telemetry", val);
         }
     }
-    // Signal that this is a harness-wrapped response
     resp_headers.insert(
         "x-sbh-version",
         HeaderValue::from_static(env!("CARGO_PKG_VERSION")),
@@ -253,13 +331,19 @@ async fn health() -> impl IntoResponse {
 // ---------------------------------------------------------------------------
 
 pub async fn run_server(listen: &str, config: Config) -> anyhow::Result<()> {
+    let rate_limit = config.serve_rate_limit;
+    let max_body = config.serve_max_body_bytes;
+    let auth_enabled = config.serve_key.is_some();
+
     let state = ServeState {
         config: Arc::new(config),
+        rate_limiter: Arc::new(Mutex::new(HashMap::new())),
     };
 
     let app = Router::new()
         .route("/v1/chat/completions", post(chat_completions))
         .route("/health", axum::routing::get(health))
+        .layer(DefaultBodyLimit::max(max_body))
         .with_state(state);
 
     let listener = tokio::net::TcpListener::bind(listen).await?;
@@ -267,8 +351,18 @@ pub async fn run_server(listen: &str, config: Config) -> anyhow::Result<()> {
     eprintln!("sbh serve: listening on http://{addr}");
     eprintln!("  POST /v1/chat/completions  — OpenAI-compatible harness proxy");
     eprintln!("  GET  /health               — liveness check");
+    eprintln!(
+        "  auth: {}  rate: {}/min/IP  max-body: {} bytes",
+        if auth_enabled { "enabled" } else { "disabled" },
+        rate_limit,
+        max_body,
+    );
 
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }
 
@@ -287,7 +381,11 @@ fn summarize_result(result: &crate::types::HarnessResult) -> String {
         t.cognitive_state.coherence_rating,
         if v.passed { "passed" } else { "flagged" },
         v.confidence,
-        if v.stop_and_ask { "\n⚠ stop_and_ask=true — low confidence, review before acting" } else { "" },
+        if v.stop_and_ask {
+            "\n⚠ stop_and_ask=true — low confidence, review before acting"
+        } else {
+            ""
+        },
     )
 }
 
@@ -305,7 +403,6 @@ fn monotonic_id() -> u64 {
 }
 
 fn url_encode(s: &str) -> Result<String, ()> {
-    // Minimal percent-encoding: replace chars that are invalid in header values
     Ok(s.chars()
         .map(|c| match c {
             ' ' => "%20".to_string(),
@@ -352,6 +449,28 @@ mod tests {
         let a = monotonic_id();
         let b = monotonic_id();
         assert!(b > a);
+    }
+
+    #[test]
+    fn rate_limit_allows_up_to_max() {
+        let limiter = Arc::new(Mutex::new(HashMap::new()));
+        let ip: IpAddr = "127.0.0.1".parse().unwrap();
+        for _ in 0..5 {
+            assert!(check_rate_limit(&limiter, ip, 5));
+        }
+        assert!(!check_rate_limit(&limiter, ip, 5));
+    }
+
+    #[test]
+    fn rate_limit_different_ips_are_independent() {
+        let limiter = Arc::new(Mutex::new(HashMap::new()));
+        let ip1: IpAddr = "10.0.0.1".parse().unwrap();
+        let ip2: IpAddr = "10.0.0.2".parse().unwrap();
+        for _ in 0..3 {
+            assert!(check_rate_limit(&limiter, ip1, 3));
+        }
+        assert!(!check_rate_limit(&limiter, ip1, 3));
+        assert!(check_rate_limit(&limiter, ip2, 3));
     }
 
     #[test]

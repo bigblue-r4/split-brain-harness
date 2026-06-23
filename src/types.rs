@@ -54,6 +54,13 @@ pub struct Config {
     /// Path to the capability memory JSON file for forge persistence.
     /// None = in-memory only (no cross-session reputation).
     pub memory_path: Option<String>,
+    /// If set, `sbh serve` requires `Authorization: Bearer <serve_key>`.
+    /// The serve key is NOT forwarded as the upstream API key.
+    pub serve_key: Option<String>,
+    /// Max requests per minute per IP for `sbh serve`. Default 60.
+    pub serve_rate_limit: u32,
+    /// Max request body size in bytes for `sbh serve`. Default 1 MiB.
+    pub serve_max_body_bytes: usize,
 }
 
 impl std::fmt::Display for BackendType {

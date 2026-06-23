@@ -386,6 +386,101 @@ async fn cmd_doctor(config: &split_brain_harness::types::Config) -> Result<()> {
         }
     }
 
+    // --- forge toolchain ---
+    println!();
+    println!("--- forge toolchain ---");
+
+    // wasm32-wasip1 target
+    let wasm_installed = std::process::Command::new("rustup")
+        .args(["target", "list", "--installed"])
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).contains("wasm32-wasip1"))
+        .unwrap_or(false);
+    if wasm_installed {
+        println!("wasm32:   wasm32-wasip1 installed");
+    } else {
+        println!("wasm32:   NOT installed — run: rustup target add wasm32-wasip1");
+    }
+
+    // wasmtime binary
+    let home = std::env::var("HOME").unwrap_or_default();
+    let wasmtime_local = std::path::PathBuf::from(&home).join(".wasmtime/bin/wasmtime");
+    let wasmtime_found = wasmtime_local.exists()
+        || std::process::Command::new("which")
+            .arg("wasmtime")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+    if wasmtime_found {
+        println!("wasmtime: found");
+    } else {
+        println!("wasmtime: NOT found — install from https://wasmtime.dev or add ~/.wasmtime/bin to PATH");
+    }
+
+    // --- soul file ---
+    println!();
+    println!("--- soul ---");
+    if config.soul_path.is_empty() {
+        println!("soul:     embedded (no SBH_SOUL_PATH set)");
+    } else {
+        match std::fs::read_to_string(&config.soul_path) {
+            Ok(s) => {
+                let sections = [
+                    "[LOGIC_SYSTEM_PROMPT]",
+                    "[CREATIVE_SYSTEM_PROMPT]",
+                    "[VERIFIER_SYSTEM_PROMPT]",
+                    "[CODE_GEN_SYSTEM_PROMPT]",
+                ];
+                let missing: Vec<&str> = sections
+                    .iter()
+                    .copied()
+                    .filter(|t| !s.contains(t))
+                    .collect();
+                if missing.is_empty() {
+                    println!("soul:     {} — all sections present", config.soul_path);
+                } else {
+                    println!(
+                        "soul:     {} — missing sections: {}",
+                        config.soul_path,
+                        missing.join(", ")
+                    );
+                }
+            }
+            Err(e) => println!("soul:     {} — read error: {e}", config.soul_path),
+        }
+    }
+
+    // --- capability memory ---
+    println!();
+    println!("--- memory ---");
+    match &config.memory_path {
+        None => println!("memory:   disabled (set SBH_MEMORY_PATH for persistent reputation)"),
+        Some(path) => match std::fs::read_to_string(path) {
+            Ok(s) => match serde_json::from_str::<serde_json::Value>(&s) {
+                Ok(_) => println!("memory:   {path} — valid JSON"),
+                Err(e) => println!("memory:   {path} — invalid JSON: {e}"),
+            },
+            Err(_) => {
+                println!("memory:   {path} — not found (will be created on first forge run)")
+            }
+        },
+    }
+
+    // --- serve config ---
+    println!();
+    println!("--- serve ---");
+    println!(
+        "serve:    auth={} rate={}/min/IP max-body={}B",
+        if config.serve_key.is_some() {
+            "enabled"
+        } else {
+            "disabled"
+        },
+        config.serve_rate_limit,
+        config.serve_max_body_bytes,
+    );
+
     Ok(())
 }
 
