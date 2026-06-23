@@ -52,7 +52,7 @@ async fn main() -> Result<()> {
         }
         Command::Doctor => cmd_doctor(&config).await,
         Command::Demo { raw, offline, pause } => cmd_demo(&config, raw, offline, pause).await,
-        Command::ExportOllama { base, output } => cmd_export_ollama(&config, &base, &output),
+        Command::ExportOllama { base, output, no_context } => cmd_export_ollama(&config, &base, &output, no_context),
         Command::DebugBundle { input, output } => {
             config.dump_prompt = true;
             config.dump_raw = true;
@@ -97,6 +97,7 @@ enum Command {
     ExportOllama {
         base: String,
         output: String,
+        no_context: bool,
     },
     DebugBundle {
         input: String,
@@ -208,7 +209,8 @@ fn parse_command(args: &[String]) -> Result<Command> {
                 .ok_or_else(|| anyhow!("export-ollama requires --base <model>"))?;
             let output =
                 flag_value(args, "--output").unwrap_or_else(|| "Modelfile.split-brain".to_string());
-            return Ok(Command::ExportOllama { base, output });
+            let no_context = args.contains(&"--no-context".to_string());
+            return Ok(Command::ExportOllama { base, output, no_context });
         }
         Some("debug-bundle") => {
             let output = flag_value(args, "--output");
@@ -291,7 +293,7 @@ fn parse_command(args: &[String]) -> Result<Command> {
              Usage: split-brain-harness --stdin [--raw] [--trace] [--dump-prompt] [--dump-raw]\n\
              Usage: split-brain-harness doctor\n\
              Usage: split-brain-harness demo [--offline] [--pause] [--raw]\n\
-             Usage: split-brain-harness export-ollama --base <model> [--output <file>]\n\
+             Usage: split-brain-harness export-ollama --base <model> [--output <file>] [--no-context]\n\
              Usage: split-brain-harness debug-bundle [--output <file>] \"input\"\n\
              Usage: split-brain-harness forge \"capability\" \"input\"\n\
              Usage: split-brain-harness serve [--listen <addr>] [--session-log <path>]\n\
@@ -1241,20 +1243,46 @@ fn cmd_export_ollama(
     config: &split_brain_harness::types::Config,
     base: &str,
     output: &str,
+    no_context: bool,
 ) -> Result<()> {
+    use split_brain_harness::rag::ContextCorpus;
+
     let loaded_soul =
         soul::load(Some(&config.soul_path)).map_err(|e| anyhow!("failed to load soul: {e}"))?;
 
-    let sys = loaded_soul
-        .logic_system_prompt
-        .replace("\"\"\"", "\\\"\\\"\\\"");
+    // Build the system prompt with optional RAG injection (same order as transformer)
+    let mut sys = loaded_soul.logic_system_prompt.clone();
+    let mut context_doc_count = 0usize;
+
+    if !no_context {
+        let mut corpus = ContextCorpus::embedded();
+        if let Some(ref path) = config.context_path {
+            match ContextCorpus::load(path) {
+                Ok(extra) => corpus.merge(extra),
+                Err(e) => eprintln!("warning: could not load context path {path:?}: {e}"),
+            }
+        }
+        context_doc_count = corpus.len();
+        let rendered = corpus.render(6000);
+        if !rendered.is_empty() {
+            sys.push_str("\n\n--- CONTEXT REFERENCE ---\n");
+            sys.push_str(
+                "Use the following doctrine reference when calibrating telemetry scores.\n\n",
+            );
+            sys.push_str(&rendered);
+            sys.push_str("\n--- END CONTEXT REFERENCE ---");
+        }
+    }
+
+    // Escape triple-quotes so they don't break the Modelfile SYSTEM block
+    let sys_escaped = sys.replace("\"\"\"", "\\\"\\\"\\\"");
 
     let modelfile = format!(
         "FROM {base}\n\
          PARAMETER temperature 0.1\n\
-         PARAMETER num_predict 600\n\
+         PARAMETER num_predict 2048\n\
          SYSTEM \"\"\"\n\
-         {sys}\n\
+         {sys_escaped}\n\
          \"\"\"\n\
          TEMPLATE \"\"\"\n\
          {{{{ if .System }}}}<|system|>\n\
@@ -1269,11 +1297,21 @@ fn cmd_export_ollama(
 
     std::fs::write(output, &modelfile).map_err(|e| anyhow!("failed to write {output}: {e}"))?;
 
-    println!("wrote: {output}");
+    let context_note = if no_context {
+        "no context docs (--no-context)".to_string()
+    } else {
+        format!("{context_doc_count} context doc(s) embedded")
+    };
+    println!("wrote: {output}  [{context_note}]");
     println!();
     println!("next steps:");
     println!("  ollama create split-brain:latest -f {output}");
     println!("  ollama run split-brain:latest \"your input text\"");
+    if !no_context && context_doc_count > 0 {
+        println!();
+        println!("note: context docs are baked into this Modelfile.");
+        println!("      re-run export-ollama after updating soul.md or SBH_CONTEXT_PATH.");
+    }
 
     Ok(())
 }
@@ -1593,9 +1631,10 @@ mod tests {
             "Modelfile",
         ]);
         match parse_command(&a).unwrap() {
-            Command::ExportOllama { base, output } => {
+            Command::ExportOllama { base, output, no_context } => {
                 assert_eq!(base, "llama3.2:3b");
                 assert_eq!(output, "Modelfile");
+                assert!(!no_context);
             }
             _ => panic!("expected ExportOllama"),
         }
@@ -1608,6 +1647,15 @@ mod tests {
             Command::ExportOllama { output, .. } => {
                 assert_eq!(output, "Modelfile.split-brain");
             }
+            _ => panic!("expected ExportOllama"),
+        }
+    }
+
+    #[test]
+    fn parse_export_ollama_no_context_flag() {
+        let a = args(&["sbh", "export-ollama", "--base", "llama3.2:3b", "--no-context"]);
+        match parse_command(&a).unwrap() {
+            Command::ExportOllama { no_context, .. } => assert!(no_context),
             _ => panic!("expected ExportOllama"),
         }
     }
