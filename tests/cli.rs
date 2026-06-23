@@ -193,6 +193,38 @@ fn demo_offline_prints_would_have_run() {
     );
 }
 
+#[test]
+fn demo_offline_flag_shows_all_five_cases() {
+    let output = sbh()
+        .args(["demo", "--offline"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "exit code: {}", output.status);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // All 5 demo cases should appear
+    assert!(stderr.contains("benign technical query"),       "missing benign case");
+    assert!(stderr.contains("prompt injection attempt"),     "missing injection case");
+    assert!(stderr.contains("social engineering"),           "missing social-eng case");
+    assert!(stderr.contains("subtle flattery manipulation"), "missing flattery case");
+    assert!(stderr.contains("legitimate creative roleplay"), "missing roleplay case");
+    // Summary table should appear
+    assert!(stderr.contains("Demo Summary"), "missing summary");
+    assert!(stderr.contains("5 analyzed"),  "missing totals");
+}
+
+#[test]
+fn demo_offline_raw_flag_outputs_json() {
+    let output = sbh()
+        .args(["demo", "--offline", "--raw"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Each case emits a JSON line; check for known fields
+    assert!(stdout.contains("manipulation_risk"), "expected JSON telemetry fields");
+    assert!(stdout.contains("verification"),      "expected verification field");
+}
+
 // ---------------------------------------------------------------------------
 // debug-bundle (arg parsing — no live backend needed; bundle written on error)
 // ---------------------------------------------------------------------------
