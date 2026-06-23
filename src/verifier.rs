@@ -239,8 +239,10 @@ async fn run_llm_verify(
         .await
         .map_err(|e| anyhow::anyhow!("verifier inference error: {e}"))?;
 
-    let out: VerifierLLMOutput = extractor::extract(&raw)
-        .map_err(|e| anyhow::anyhow!("verifier output parse failed: {e}"))?;
+    let out: VerifierLLMOutput = extractor::extract(&raw).map_err(|e| {
+        let preview: String = raw.chars().take(200).collect();
+        anyhow::anyhow!("verifier output parse failed: {e}\n  raw (first 200 chars): {preview}")
+    })?;
 
     let note = if out.unsupported_claims.is_empty() {
         None

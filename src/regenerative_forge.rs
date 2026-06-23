@@ -1,7 +1,8 @@
-/// Phase 5 supervisor — the Regenerative Forge.
+/// Phase 5 of the Ephemeral Tool Forge — retry, reputation, and audit.
 ///
 /// Wraps the full Phase 3+4 pipeline (generate → static-analyse → compile →
-/// execute) with retry logic and reputation tracking.
+/// execute) with retry-with-feedback, Laplace-smoothed reputation scoring,
+/// blacklist enforcement, and an optional append-only audit log.
 ///
 /// On each failure, the specific failure reason is injected into the next
 /// generation prompt as `<previous_failure>` context so the model can correct

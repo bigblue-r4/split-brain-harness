@@ -4,6 +4,7 @@ pub mod backends;
 pub mod capability;
 pub mod code_gen;
 pub mod config;
+pub use config::validate_config;
 pub mod context_packs;
 pub mod extractor;
 pub mod generative_forge;

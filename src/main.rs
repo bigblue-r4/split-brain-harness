@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use split_brain_harness::{
     analyze, backends,
     capability::{Budget, CapabilityConstraints, CapabilityRequest},
-    config::build_config,
+    config::{build_config, validate_config},
     prepare_prompt,
     regenerative_forge::RegenerativeForge,
     soul,
@@ -17,7 +17,26 @@ async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let mut config = build_config();
 
-    match parse_command(&args)? {
+    let cmd = parse_command(&args)?;
+
+    // Validate config for commands that reach the backend.
+    // doctor, audit, and export-ollama handle their own reporting or need no model.
+    let needs_backend = !matches!(
+        cmd,
+        Command::Doctor | Command::Audit { .. } | Command::ExportOllama { .. }
+    );
+    // --dump-prompt exits before any model call, so skip validation there too.
+    let is_dump = matches!(cmd, Command::Analyze { dump_prompt: true, .. });
+    if needs_backend && !is_dump {
+        if let Err(errs) = validate_config(&config) {
+            for e in &errs {
+                eprintln!("config error: {e}");
+            }
+            std::process::exit(1);
+        }
+    }
+
+    match cmd {
         Command::Analyze {
             raw,
             trace,

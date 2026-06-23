@@ -1,8 +1,12 @@
-/// Phase 3 supervisor — the Generative Forge.
+/// Phase 3 of the Ephemeral Tool Forge — source generation and static analysis.
 ///
-/// Takes a CapabilityRequest, generates Rust source via the inference engine,
-/// runs static analysis and verifies tests are present. Does NOT execute the
-/// generated code against real user data. That is Phase 4 (WASM/WASI).
+/// Takes a `CapabilityRequest`, calls the inference engine to produce a Rust
+/// function with inline tests, then runs static analysis and verifies tests
+/// are present.  Does NOT execute the code — that is Phase 4 (`wasm_forge`).
+///
+/// **Status**: production-quality, full test coverage.
+/// **Requires**: a configured inference backend (SBH_BACKEND / SBH_API_KEY).
+/// **CLI entry point**: `sbh forge "<capability>" "<input>"`
 ///
 /// Pipeline:
 ///   input validation → policy check → code generation →

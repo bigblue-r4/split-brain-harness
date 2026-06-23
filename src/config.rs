@@ -26,20 +26,33 @@ fn load_file_config() -> FileConfig {
     }
 }
 
+/// Maps a backend name string to a BackendType and its default endpoint.
+///
+/// Unrecognized strings produce a warning on stderr and fall back to
+/// `ollama-native`.  Valid values: `ollama-native`, `openai-compat`,
+/// `anthropic`, `local-embedded`.
 pub fn parse_backend(s: &str) -> (BackendType, &'static str) {
     match s {
-        "openai-compat" => (BackendType::OpenAiCompat, "http://localhost:8080"),
-        "anthropic" => (BackendType::Anthropic, "https://api.anthropic.com"),
-        "local-embedded" => (BackendType::LocalEmbedded, ""),
-        _ => (BackendType::OllamaNative, "http://localhost:11434"),
+        "openai-compat"  => (BackendType::OpenAiCompat,   "http://localhost:8080"),
+        "anthropic"      => (BackendType::Anthropic,       "https://api.anthropic.com"),
+        "local-embedded" => (BackendType::LocalEmbedded,   ""),
+        "ollama-native"  => (BackendType::OllamaNative,    "http://localhost:11434"),
+        other => {
+            eprintln!(
+                "warning: unrecognized SBH_BACKEND={other:?} — \
+                 valid values: ollama-native, openai-compat, anthropic, local-embedded. \
+                 Falling back to ollama-native."
+            );
+            (BackendType::OllamaNative, "http://localhost:11434")
+        }
     }
 }
 
 pub fn parse_verify_mode(s: &str) -> VerifyMode {
     match s {
-        "llm" => VerifyMode::Llm,
+        "llm"  => VerifyMode::Llm,
         "none" => VerifyMode::None,
-        _ => VerifyMode::Deterministic,
+        _      => VerifyMode::Deterministic,
     }
 }
 
@@ -96,5 +109,192 @@ pub fn build_config() -> Config {
             .or(file.serve_max_body_bytes)
             .unwrap_or(1_048_576),
         session_log_path: std::env::var("SBH_SESSION_LOG").ok().or(file.session_log_path),
+    }
+}
+
+/// Validate a Config and return a list of human-readable error messages.
+///
+/// Should be called before dispatching any command that reaches the backend
+/// (analyze, serve, forge).  The `doctor` command bypasses this and does its
+/// own reporting so users can inspect a broken config.
+pub fn validate_config(config: &Config) -> Result<(), Vec<String>> {
+    let mut errors: Vec<String> = Vec::new();
+
+    if config.model_name.trim().is_empty() {
+        errors.push("model_name is empty — set SBH_MODEL or model_name in config.toml".into());
+    }
+
+    if config.timeout_secs == 0 {
+        errors.push(
+            "timeout_secs must be > 0 — set SBH_TIMEOUT_SECONDS or timeout_secs in config.toml"
+                .into(),
+        );
+    }
+
+    if config.serve_rate_limit == 0 {
+        errors.push(
+            "serve_rate_limit must be > 0 — set SBH_SERVE_RATE or serve_rate_limit in config.toml"
+                .into(),
+        );
+    }
+
+    if config.serve_max_body_bytes == 0 {
+        errors.push(
+            "serve_max_body_bytes must be > 0 — set SBH_SERVE_MAX_BODY or serve_max_body_bytes in config.toml"
+                .into(),
+        );
+    }
+
+    if matches!(config.backend, BackendType::Anthropic)
+        && config
+            .api_key
+            .as_deref()
+            .map(|k| k.trim().is_empty())
+            .unwrap_or(true)
+    {
+        errors.push(
+            "SBH_API_KEY is required when using the anthropic backend — \
+             set SBH_API_KEY or api_key in config.toml"
+                .into(),
+        );
+    }
+
+    if matches!(config.backend, BackendType::LocalEmbedded) {
+        errors.push(
+            "local-embedded backend is not yet implemented — \
+             use ollama-native, openai-compat, or anthropic"
+                .into(),
+        );
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::BackendType;
+
+    fn base_config() -> Config {
+        Config {
+            backend: BackendType::OllamaNative,
+            endpoint: "http://localhost:11434".into(),
+            model_name: "llama3.2:3b".into(),
+            soul_path: String::new(),
+            api_key: None,
+            verify_mode: VerifyMode::Deterministic,
+            timeout_secs: 120,
+            dump_prompt: false,
+            dump_raw: false,
+            memory_path: None,
+            audit_path: None,
+            serve_key: None,
+            serve_rate_limit: 60,
+            serve_max_body_bytes: 1_048_576,
+            session_log_path: None,
+        }
+    }
+
+    #[test]
+    fn valid_ollama_config_passes() {
+        assert!(validate_config(&base_config()).is_ok());
+    }
+
+    #[test]
+    fn anthropic_without_api_key_is_invalid() {
+        let mut c = base_config();
+        c.backend = BackendType::Anthropic;
+        c.api_key = None;
+        let errs = validate_config(&c).unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("SBH_API_KEY")));
+    }
+
+    #[test]
+    fn anthropic_with_empty_api_key_is_invalid() {
+        let mut c = base_config();
+        c.backend = BackendType::Anthropic;
+        c.api_key = Some("   ".into());
+        let errs = validate_config(&c).unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("SBH_API_KEY")));
+    }
+
+    #[test]
+    fn anthropic_with_api_key_passes() {
+        let mut c = base_config();
+        c.backend = BackendType::Anthropic;
+        c.api_key = Some("sk-ant-test".into());
+        assert!(validate_config(&c).is_ok());
+    }
+
+    #[test]
+    fn local_embedded_is_invalid() {
+        let mut c = base_config();
+        c.backend = BackendType::LocalEmbedded;
+        let errs = validate_config(&c).unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("local-embedded")));
+    }
+
+    #[test]
+    fn empty_model_name_is_invalid() {
+        let mut c = base_config();
+        c.model_name = "   ".into();
+        let errs = validate_config(&c).unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("model_name")));
+    }
+
+    #[test]
+    fn zero_timeout_is_invalid() {
+        let mut c = base_config();
+        c.timeout_secs = 0;
+        let errs = validate_config(&c).unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("timeout_secs")));
+    }
+
+    #[test]
+    fn zero_rate_limit_is_invalid() {
+        let mut c = base_config();
+        c.serve_rate_limit = 0;
+        let errs = validate_config(&c).unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("serve_rate_limit")));
+    }
+
+    #[test]
+    fn zero_max_body_is_invalid() {
+        let mut c = base_config();
+        c.serve_max_body_bytes = 0;
+        let errs = validate_config(&c).unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("serve_max_body_bytes")));
+    }
+
+    #[test]
+    fn multiple_errors_all_reported() {
+        let mut c = base_config();
+        c.model_name = String::new();
+        c.timeout_secs = 0;
+        c.serve_rate_limit = 0;
+        let errs = validate_config(&c).unwrap_err();
+        assert!(errs.len() >= 3);
+    }
+
+    #[test]
+    fn parse_backend_known_values() {
+        assert!(matches!(parse_backend("ollama-native").0, BackendType::OllamaNative));
+        assert!(matches!(parse_backend("openai-compat").0, BackendType::OpenAiCompat));
+        assert!(matches!(parse_backend("anthropic").0, BackendType::Anthropic));
+        assert!(matches!(parse_backend("local-embedded").0, BackendType::LocalEmbedded));
+    }
+
+    #[test]
+    fn parse_backend_unknown_falls_back_to_ollama() {
+        // Falls back to ollama-native with a warning (warning goes to stderr, not assertable here)
+        assert!(matches!(parse_backend("typo-backend").0, BackendType::OllamaNative));
     }
 }

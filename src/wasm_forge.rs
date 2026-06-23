@@ -1,8 +1,13 @@
-/// Phase 4 supervisor — the WASM Forge.
+/// Phase 4 of the Ephemeral Tool Forge — WASM/WASI sandboxed execution.
 ///
-/// Takes a verified GeneratedTool (Phase 3 output), compiles it to WASM/WASI
-/// using `rustc --target wasm32-wasi`, executes it in the `wasmtime` CLI
-/// sandbox (no network, no filesystem), captures stdout, destroys the binary,
+/// Takes a verified `GeneratedTool` (Phase 3 output), compiles it to
+/// `wasm32-wasip1`, executes it in the `wasmtime` CLI sandbox (no network,
+/// no filesystem access), captures stdout, then destroys the binary.
+///
+/// **Status**: production-quality, full test coverage.
+/// **Requires**: `rustup target add wasm32-wasip1` and `wasmtime` in PATH.
+///   Run `sbh doctor` to verify the toolchain is installed.
+/// **CLI entry point**: `sbh forge "<capability>" "<input>"` (via `regenerative_forge`)
 /// and stores fingerprint metrics only.
 ///
 /// The supervisor code calls `std::process::Command` — that is the supervisor's
