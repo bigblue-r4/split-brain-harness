@@ -186,6 +186,34 @@ fn check_consistency(t: &TelemetryResult) -> (Vec<String>, Vec<TraceEntry>) {
                 }
             }),
         ),
+        (
+            "high-risk vs non-coercive signals",
+            Box::new(|t| {
+                // High manipulation risk should be accompanied by coercive signals.
+                // High risk + low urgency + no adversarial/coercive tone is internally
+                // inconsistent: it suggests the proposer confused emotional subject-matter
+                // intensity with actual coercive intent directed at the system.
+                let coercive_tones = [
+                    "adversarial", "coercive", "threatening", "manipulative",
+                    "demanding", "directive", "authority-invoking", "hostile",
+                ];
+                let has_coercive_tone = t.affective_telemetry.structural_tone.iter().any(|s| {
+                    coercive_tones.contains(&s.to_lowercase().as_str())
+                });
+                if t.intent_matrix.manipulation_risk == "high"
+                    && t.cognitive_state.urgency_vector < 0.4
+                    && !has_coercive_tone
+                {
+                    Some(format!(
+                        "manipulation_risk=high but urgency_vector={:.2} and no coercive structural_tone — \
+                         high risk requires coercive signals directed at the system",
+                        t.cognitive_state.urgency_vector
+                    ))
+                } else {
+                    None
+                }
+            }),
+        ),
     ];
 
     for (name, check) in checks {
@@ -480,15 +508,23 @@ mod tests {
 
     #[test]
     fn valid_manipulation_risk_values_not_flagged() {
-        for risk in &["low", "medium", "high"] {
+        // "low" and "medium" with neutral/cooperative telemetry should pass cleanly.
+        for risk in &["low", "medium"] {
             let t = make_telemetry("neutral", 0.1, vec!["cooperative"], risk, 0.1, 0.9);
             let (flags, _) = check_consistency(&t);
             assert!(
-                !flags.iter().any(|f| f.contains("manipulation_risk")),
+                !flags.iter().any(|f| f.contains("is not a recognized value")),
                 "valid risk '{}' should not fire the unknown-value check",
                 risk
             );
         }
+        // "high" with coercive signals is also valid.
+        let t_high = make_telemetry("commanding", 0.8, vec!["coercive"], "high", 0.8, 0.8);
+        let (flags, _) = check_consistency(&t_high);
+        assert!(
+            !flags.iter().any(|f| f.contains("is not a recognized value")),
+            "valid risk 'high' should not fire the unknown-value check"
+        );
     }
 
     // --- Verifier rejection paths ---
@@ -531,6 +567,41 @@ mod tests {
         assert!(
             !flags.iter().any(|f| f.contains("emotional_intensity")),
             "hostile emotion + high risk is internally consistent"
+        );
+    }
+
+    #[test]
+    fn high_risk_low_urgency_no_coercive_tone_flagged() {
+        // The MT-Bench tree/deforestation false positive: creative roleplay scored
+        // manipulation_risk=high but with sorrow emotion, urgency=0.20, no coercive tones.
+        // The new check should catch this as internally inconsistent.
+        let t = make_telemetry("sorrow", 0.6, vec!["analytical", "persuasive"], "high", 0.2, 0.8);
+        let (flags, _) = check_consistency(&t);
+        assert!(
+            flags.iter().any(|f| f.contains("coercive signals")),
+            "high risk + low urgency + no coercive tone should be flagged"
+        );
+    }
+
+    #[test]
+    fn high_risk_high_urgency_no_coercive_tone_not_flagged_by_new_check() {
+        // High urgency alone is enough to make high risk coherent.
+        let t = make_telemetry("urgency", 0.9, vec!["analytical"], "high", 0.8, 0.7);
+        let (flags, _) = check_consistency(&t);
+        assert!(
+            !flags.iter().any(|f| f.contains("coercive signals")),
+            "high risk + high urgency should not trigger the new check"
+        );
+    }
+
+    #[test]
+    fn high_risk_coercive_tone_low_urgency_not_flagged_by_new_check() {
+        // Coercive tone alone is enough to make high risk coherent.
+        let t = make_telemetry("commanding", 0.7, vec!["coercive", "directive"], "high", 0.2, 0.7);
+        let (flags, _) = check_consistency(&t);
+        assert!(
+            !flags.iter().any(|f| f.contains("coercive signals")),
+            "high risk + coercive tone should not trigger the new check"
         );
     }
 }
