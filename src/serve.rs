@@ -584,6 +584,7 @@ pub async fn run_server(listen: &str, config: Config) -> anyhow::Result<()> {
     let max_body = config.serve_max_body_bytes;
     let auth_enabled = config.serve_key.is_some();
     let session_log_path = config.session_log_path.clone();
+    let context_path = config.context_path.clone();
 
     let state = ServeState {
         config: Arc::new(config),
@@ -617,6 +618,17 @@ pub async fn run_server(listen: &str, config: Config) -> anyhow::Result<()> {
         Some(p) => eprintln!("  session log: {p}"),
         None => eprintln!("  session log: disabled (set SBH_SESSION_LOG or --session-log)"),
     };
+    {
+        use crate::rag::ContextCorpus;
+        let embedded_count = ContextCorpus::embedded().len();
+        match context_path.as_deref() {
+            None => eprintln!("  context: {embedded_count} embedded docs (set SBH_CONTEXT_PATH to add operator docs)"),
+            Some(p) => match ContextCorpus::load(p) {
+                Ok(extra) => eprintln!("  context: {} embedded + {} operator docs from {p}", embedded_count, extra.len()),
+                Err(e) => eprintln!("  context: {p} load error — {e}"),
+            },
+        }
+    }
 
     axum::serve(
         listener,

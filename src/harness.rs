@@ -1,9 +1,9 @@
 use crate::adaptor::{self, PackSelection};
 use crate::backends::InferenceEngine;
-use crate::capability::{CapabilityRequest, ModelProposalOutput};
+use crate::capability::CapabilityRequest;
 use crate::context_packs::ContextPack;
-use crate::extractor;
 use crate::input_validation;
+use crate::transformer::SplitBrainTransformer;
 use crate::types::{
     AfferentTelemetry, CognitiveState, Config, HarnessResult, IntentMatrix, Soul, TelemetryResult,
     TraceEntry, VerificationReport,
@@ -12,18 +12,28 @@ use crate::verifier;
 use anyhow::{anyhow, Result};
 
 pub struct Harness<'e> {
-    soul: Soul,
+    transformer: SplitBrainTransformer,
     engine: &'e dyn InferenceEngine,
     config: &'e Config,
 }
 
 impl<'e> Harness<'e> {
+    /// Create with embedded default corpus and default transform policy.
     pub fn new(soul: Soul, engine: &'e dyn InferenceEngine, config: &'e Config) -> Self {
         Self {
-            soul,
+            transformer: SplitBrainTransformer::new(soul),
             engine,
             config,
         }
+    }
+
+    /// Create with a pre-built transformer (custom corpus / policy).
+    pub fn new_with_transformer(
+        transformer: SplitBrainTransformer,
+        engine: &'e dyn InferenceEngine,
+        config: &'e Config,
+    ) -> Self {
+        Self { transformer, engine, config }
     }
 
     /// Two-stage pipeline:
@@ -65,7 +75,7 @@ impl<'e> Harness<'e> {
         let (verification, verify_traces) = verifier::verify(
             input,
             &telemetry,
-            &self.soul,
+            &self.transformer.soul,
             self.engine,
             &self.config.verify_mode,
         )
@@ -120,8 +130,8 @@ impl<'e> Harness<'e> {
             });
         }
 
-        let (system_prompt, payload) =
-            adaptor::prepare(&self.soul.logic_system_prompt, input, &active_packs);
+        let system_prompt = self.transformer.transform_system(&active_packs);
+        let payload = self.transformer.transform_payload(input);
 
         if self.config.dump_prompt {
             eprintln!(
@@ -163,7 +173,7 @@ impl<'e> Harness<'e> {
             });
         }
 
-        match extractor::extract::<ModelProposalOutput>(&raw_response) {
+        match self.transformer.postprocess(&raw_response) {
             Ok(output) => {
                 let telemetry = output.telemetry;
                 let capability_request = output.capability_request;
@@ -326,6 +336,7 @@ mod tests {
             serve_rate_limit: 60,
             serve_max_body_bytes: 1_048_576,
             session_log_path: None,
+            context_path: None,
         }
     }
 

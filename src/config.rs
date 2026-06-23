@@ -16,6 +16,7 @@ struct FileConfig {
     serve_rate_limit: Option<u32>,
     serve_max_body_bytes: Option<usize>,
     session_log_path: Option<String>,
+    context_path: Option<String>,
 }
 
 fn load_file_config() -> FileConfig {
@@ -109,6 +110,7 @@ pub fn build_config() -> Config {
             .or(file.serve_max_body_bytes)
             .unwrap_or(1_048_576),
         session_log_path: std::env::var("SBH_SESSION_LOG").ok().or(file.session_log_path),
+        context_path: std::env::var("SBH_CONTEXT_PATH").ok().or(file.context_path),
     }
 }
 
@@ -200,6 +202,7 @@ mod tests {
             serve_rate_limit: 60,
             serve_max_body_bytes: 1_048_576,
             session_log_path: None,
+            context_path: None,
         }
     }
 

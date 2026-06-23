@@ -68,6 +68,10 @@ pub struct Config {
     /// Written on every slow-boil escalation event detected by `sbh serve`.
     /// None = events are not persisted.
     pub session_log_path: Option<String>,
+    /// Path to operator-supplied context docs (TOML file or directory of TOML files).
+    /// Merged with the embedded default corpus and injected into the system prompt.
+    /// None = embedded default corpus only.
+    pub context_path: Option<String>,
 }
 
 impl std::fmt::Display for BackendType {

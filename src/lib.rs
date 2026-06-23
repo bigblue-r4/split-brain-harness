@@ -11,6 +11,7 @@ pub mod generative_forge;
 pub mod harness;
 pub mod input_validation;
 pub mod policy;
+pub mod rag;
 pub mod regenerative_forge;
 pub mod reputation;
 pub mod serve;
@@ -19,6 +20,7 @@ pub mod soul;
 pub mod static_analysis;
 pub mod tool_forge;
 pub mod tool_memory;
+pub mod transformer;
 pub mod types;
 pub mod verifier;
 pub mod wasm_forge;
@@ -31,7 +33,23 @@ use types::{Config, HarnessResult};
 pub async fn analyze(input: &str, config: &Config) -> Result<HarnessResult> {
     let loaded_soul = soul::load(Some(&config.soul_path))?;
     let engine = backends::init_engine(config);
-    let h = harness::Harness::new(loaded_soul, engine.as_ref(), config);
+
+    let t = if let Some(ref path) = config.context_path {
+        let mut corpus = rag::ContextCorpus::embedded();
+        match rag::ContextCorpus::load(path) {
+            Ok(extra) => corpus.merge(extra),
+            Err(e) => eprintln!("warning: could not load context path {path:?}: {e}"),
+        }
+        transformer::SplitBrainTransformer::with_corpus(
+            loaded_soul,
+            corpus,
+            transformer::TransformPolicy::default(),
+        )
+    } else {
+        transformer::SplitBrainTransformer::new(loaded_soul)
+    };
+
+    let h = harness::Harness::new_with_transformer(t, engine.as_ref(), config);
     h.analyze(input).await
 }
 

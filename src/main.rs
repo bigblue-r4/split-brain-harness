@@ -526,6 +526,30 @@ async fn cmd_doctor(config: &split_brain_harness::types::Config) -> Result<()> {
         config.serve_max_body_bytes,
     );
 
+    // --- context / RAG corpus ---
+    println!();
+    println!("--- context ---");
+    {
+        use split_brain_harness::rag::ContextCorpus;
+        let embedded = ContextCorpus::embedded();
+        match config.context_path.as_deref() {
+            None => println!(
+                "context:  embedded default  ({} docs)  \
+                 — set SBH_CONTEXT_PATH to add operator docs",
+                embedded.len()
+            ),
+            Some(p) => match ContextCorpus::load(p) {
+                Ok(extra) => println!(
+                    "context:  embedded ({} docs) + {p} ({} docs)  — {} total",
+                    embedded.len(),
+                    extra.len(),
+                    embedded.len() + extra.len()
+                ),
+                Err(e) => println!("context:  {p} — load error: {e}"),
+            },
+        }
+    }
+
     // --- witness layer ---
     println!();
     println!("--- witness ---");

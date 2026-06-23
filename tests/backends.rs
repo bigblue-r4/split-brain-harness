@@ -25,6 +25,7 @@ fn make_config(backend: BackendType, api_key: Option<&str>) -> Config {
         serve_rate_limit: 60,
         serve_max_body_bytes: 1_048_576,
         session_log_path: None,
+        context_path: None,
     }
 }
 
