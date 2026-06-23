@@ -493,6 +493,24 @@ async fn cmd_doctor(config: &split_brain_harness::types::Config) -> Result<()> {
         config.serve_max_body_bytes,
     );
 
+    // --- witness layer ---
+    println!();
+    println!("--- witness ---");
+    let witness_running = std::process::Command::new("witness")
+        .arg("status")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if witness_running {
+        println!("witness:  active");
+    } else {
+        println!("witness:  not running (run 'witness start' for cryptographic forge witnessing)");
+    }
+    let sbh_audit = config.audit_path.as_deref().unwrap_or("—");
+    println!("sbh→witness feed: {sbh_audit}");
+
     Ok(())
 }
 

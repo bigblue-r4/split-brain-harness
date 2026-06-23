@@ -305,6 +305,26 @@ async fn chat_completions(
         "x-sbh-version",
         HeaderValue::from_static(env!("CARGO_PKG_VERSION")),
     );
+    // Indicate whether the forge audit log is being witnessed
+    let witness_status = if cfg.audit_path.is_some() {
+        let running = std::process::Command::new("witness")
+            .arg("status")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if running {
+            "active"
+        } else {
+            "inactive"
+        }
+    } else {
+        "not-configured"
+    };
+    if let Ok(val) = HeaderValue::from_str(witness_status) {
+        resp_headers.insert("x-sbh-witness", val);
+    }
 
     (
         StatusCode::OK,
