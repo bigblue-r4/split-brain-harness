@@ -37,6 +37,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
+use anyhow::Context as _;
 use crate::{analyze, session_log, types::Config};
 
 // ---------------------------------------------------------------------------
@@ -579,7 +580,7 @@ async fn health() -> impl IntoResponse {
 // Public entry point
 // ---------------------------------------------------------------------------
 
-pub async fn run_server(listen: &str, config: Config) -> anyhow::Result<()> {
+pub async fn run_server(listen: &str, config: Config, tls_cert: Option<&str>, tls_key: Option<&str>) -> anyhow::Result<()> {
     let rate_limit = config.serve_rate_limit;
     let max_body = config.serve_max_body_bytes;
     let auth_enabled = config.serve_key.is_some();
@@ -602,39 +603,60 @@ pub async fn run_server(listen: &str, config: Config) -> anyhow::Result<()> {
         .layer(DefaultBodyLimit::max(max_body))
         .with_state(state);
 
-    let listener = tokio::net::TcpListener::bind(listen).await?;
-    let addr = listener.local_addr()?;
-    eprintln!("sbh serve: listening on http://{addr}");
-    eprintln!("  POST /v1/chat/completions  — OpenAI-compatible harness proxy");
-    eprintln!("  GET  /health               — liveness check");
-    eprintln!("  GET  /metrics              — Prometheus counters");
-    eprintln!(
-        "  auth: {}  rate: {}/min/IP  max-body: {} bytes",
-        if auth_enabled { "enabled" } else { "disabled" },
-        rate_limit,
-        max_body,
-    );
-    match &session_log_path {
-        Some(p) => eprintln!("  session log: {p}"),
-        None => eprintln!("  session log: disabled (set SBH_SESSION_LOG or --session-log)"),
+    let print_banner = |scheme: &str, addr: SocketAddr| {
+        eprintln!("sbh serve: listening on {scheme}://{addr}");
+        eprintln!("  POST /v1/chat/completions  — OpenAI-compatible harness proxy");
+        eprintln!("  GET  /health               — liveness check");
+        eprintln!("  GET  /metrics              — Prometheus counters");
+        eprintln!(
+            "  auth: {}  rate: {}/min/IP  max-body: {} bytes",
+            if auth_enabled { "enabled" } else { "disabled" },
+            rate_limit,
+            max_body,
+        );
+        match &session_log_path {
+            Some(p) => eprintln!("  session log: {p}"),
+            None => eprintln!("  session log: disabled (set SBH_SESSION_LOG or --session-log)"),
+        };
+        {
+            use crate::rag::ContextCorpus;
+            let embedded_count = ContextCorpus::embedded().len();
+            match context_path.as_deref() {
+                None => eprintln!("  context: {embedded_count} embedded docs (set SBH_CONTEXT_PATH to add operator docs)"),
+                Some(p) => match ContextCorpus::load(p) {
+                    Ok(extra) => eprintln!("  context: {} embedded + {} operator docs from {p}", embedded_count, extra.len()),
+                    Err(e) => eprintln!("  context: {p} load error — {e}"),
+                },
+            }
+        }
     };
-    {
-        use crate::rag::ContextCorpus;
-        let embedded_count = ContextCorpus::embedded().len();
-        match context_path.as_deref() {
-            None => eprintln!("  context: {embedded_count} embedded docs (set SBH_CONTEXT_PATH to add operator docs)"),
-            Some(p) => match ContextCorpus::load(p) {
-                Ok(extra) => eprintln!("  context: {} embedded + {} operator docs from {p}", embedded_count, extra.len()),
-                Err(e) => eprintln!("  context: {p} load error — {e}"),
-            },
+
+    match (tls_cert, tls_key) {
+        (Some(cert), Some(key)) => {
+            use axum_server::tls_rustls::RustlsConfig;
+            let tls_config = RustlsConfig::from_pem_file(cert, key)
+                .await
+                .with_context(|| format!("TLS: failed to load cert={cert} key={key}"))?;
+            let addr: SocketAddr = listen.parse()
+                .with_context(|| format!("invalid listen address: {listen}"))?;
+            print_banner("https", addr);
+            axum_server::bind_rustls(addr, tls_config)
+                .serve(app.into_make_service_with_connect_info::<SocketAddr>())
+                .await?;
+        }
+        (Some(_), None) => anyhow::bail!("--tls-cert requires --tls-key"),
+        (None, Some(_)) => anyhow::bail!("--tls-key requires --tls-cert"),
+        (None, None) => {
+            let listener = tokio::net::TcpListener::bind(listen).await?;
+            let addr = listener.local_addr()?;
+            print_banner("http", addr);
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await?;
         }
     }
-
-    axum::serve(
-        listener,
-        app.into_make_service_with_connect_info::<SocketAddr>(),
-    )
-    .await?;
     Ok(())
 }
 

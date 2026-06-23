@@ -51,7 +51,7 @@ async fn main() -> Result<()> {
             cmd_analyze(&input, &config, raw, trace).await
         }
         Command::Doctor => cmd_doctor(&config).await,
-        Command::Demo { raw, offline, pause } => cmd_demo(&config, raw, offline, pause).await,
+        Command::Demo { raw, offline, pause, export } => cmd_demo(&config, raw, offline, pause, export.as_deref()).await,
         Command::ExportOllama { base, output, no_context } => cmd_export_ollama(&config, &base, &output, no_context),
         Command::DebugBundle { input, output } => {
             config.dump_prompt = true;
@@ -63,11 +63,11 @@ async fn main() -> Result<()> {
             input,
             max_retries,
         } => cmd_forge(&capability, &input, max_retries, &config).await,
-        Command::Serve { listen, session_log } => {
+        Command::Serve { listen, session_log, tls_cert, tls_key } => {
             if let Some(p) = session_log {
                 config.session_log_path = Some(p);
             }
-            split_brain_harness::serve::run_server(&listen, config).await
+            split_brain_harness::serve::run_server(&listen, config, tls_cert.as_deref(), tls_key.as_deref()).await
         }
         Command::Audit { tail, since } => cmd_audit(&config, tail, since.as_deref()),
         Command::Bench { input, baseline, output, fail_on_regression } => {
@@ -93,6 +93,7 @@ enum Command {
         raw: bool,
         offline: bool,
         pause: bool,
+        export: Option<String>,
     },
     ExportOllama {
         base: String,
@@ -110,6 +111,8 @@ enum Command {
     },
     Serve {
         listen: String,
+        tls_cert: Option<String>,
+        tls_key: Option<String>,
         session_log: Option<String>,
     },
     Audit {
@@ -137,6 +140,9 @@ fn positional_args(args: &[String]) -> Vec<&str> {
         "--tail",
         "--since",
         "--session-log",
+        "--export",
+        "--tls-cert",
+        "--tls-key",
     ];
     let mut result = vec![];
     let mut skip_next = false;
@@ -175,7 +181,8 @@ fn parse_command(args: &[String]) -> Result<Command> {
         Some("demo") => {
             let offline = args.contains(&"--offline".to_string());
             let pause   = args.contains(&"--pause".to_string());
-            return Ok(Command::Demo { raw, offline, pause });
+            let export  = flag_value(args, "--export");
+            return Ok(Command::Demo { raw, offline, pause, export });
         }
         Some("audit") => {
             let tail = flag_value(args, "--tail").and_then(|s| s.parse().ok());
@@ -202,7 +209,11 @@ fn parse_command(args: &[String]) -> Result<Command> {
             let listen =
                 flag_value(args, "--listen").unwrap_or_else(|| "127.0.0.1:8088".to_string());
             let session_log = flag_value(args, "--session-log");
-            return Ok(Command::Serve { listen, session_log });
+            let tls_cert = flag_value(args, "--tls-cert")
+                .or_else(|| std::env::var("SBH_TLS_CERT").ok());
+            let tls_key = flag_value(args, "--tls-key")
+                .or_else(|| std::env::var("SBH_TLS_KEY").ok());
+            return Ok(Command::Serve { listen, session_log, tls_cert, tls_key });
         }
         Some("export-ollama") => {
             let base = flag_value(args, "--base")
@@ -292,11 +303,11 @@ fn parse_command(args: &[String]) -> Result<Command> {
             "Usage: split-brain-harness [--raw] [--trace] [--dump-prompt] [--dump-raw] \"input\"\n\
              Usage: split-brain-harness --stdin [--raw] [--trace] [--dump-prompt] [--dump-raw]\n\
              Usage: split-brain-harness doctor\n\
-             Usage: split-brain-harness demo [--offline] [--pause] [--raw]\n\
+             Usage: split-brain-harness demo [--offline] [--pause] [--raw] [--export <file.md>]\n\
              Usage: split-brain-harness export-ollama --base <model> [--output <file>] [--no-context]\n\
              Usage: split-brain-harness debug-bundle [--output <file>] \"input\"\n\
              Usage: split-brain-harness forge \"capability\" \"input\"\n\
-             Usage: split-brain-harness serve [--listen <addr>] [--session-log <path>]\n\
+             Usage: split-brain-harness serve [--listen <addr>] [--session-log <path>] [--tls-cert <pem>] [--tls-key <pem>]\n\
              Usage: split-brain-harness bench <file.jsonl> [--baseline <prev.jsonl>] [--output <out.jsonl>] [--fail-on-regression]"
         ));
     }
@@ -1148,6 +1159,7 @@ async fn cmd_demo(
     raw: bool,
     offline: bool,
     pause: bool,
+    export: Option<&str>,
 ) -> Result<()> {
     use split_brain_harness::types::BackendType;
 
@@ -1186,6 +1198,9 @@ async fn cmd_demo(
         }
         let case_refs: Vec<&DemoCase> = DEMO_CASES.iter().collect();
         if !raw { demo_print_summary(&case_refs, &results, no_color); }
+        if let Some(path) = export {
+            demo_export_markdown(path, &case_refs, &results, config, true)?;
+        }
         return Ok(());
     }
 
@@ -1232,6 +1247,95 @@ async fn cmd_demo(
     if !raw && !results.is_empty() {
         demo_print_summary(&case_refs[..results.len()], &results, no_color);
     }
+    if let Some(path) = export {
+        if !results.is_empty() {
+            let refs: Vec<&DemoCase> = DEMO_CASES.iter().take(results.len()).collect();
+            demo_export_markdown(path, &refs, &results, config, false)?;
+        }
+    }
+    Ok(())
+}
+
+fn demo_export_markdown(
+    path: &str,
+    cases: &[&DemoCase],
+    results: &[HarnessResult],
+    config: &split_brain_harness::types::Config,
+    offline: bool,
+) -> Result<()> {
+    use std::io::Write;
+
+    let date = {
+        // Hand-rolled ISO date — no chrono dep. Accurate for years 1970–2099.
+        let secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let mut days = (secs / 86400) as u32;
+        let mut year = 1970u32;
+        loop {
+            let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+            let dy = if leap { 366 } else { 365 };
+            if days < dy { break; }
+            days -= dy;
+            year += 1;
+        }
+        let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+        let month_days = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+        let mut month = 0u32;
+        for (m, &md) in month_days.iter().enumerate() {
+            if days < md { month = m as u32 + 1; break; }
+            days -= md;
+        }
+        format!("{year}-{month:02}-{:02}", days + 1)
+    };
+
+    let mode = if offline { "offline (canned results)" } else { "live" };
+
+    let mut md = String::new();
+    md.push_str("# Split-Brain Harness — Demo Results\n\n");
+    md.push_str(&format!("Generated: {date}  \n"));
+    md.push_str(&format!("Backend: {} / {}  \n", config.backend, config.model_name));
+    md.push_str(&format!("Mode: {mode}\n\n"));
+
+    md.push_str("## Scenario Results\n\n");
+    md.push_str("| # | Scenario | Category | Risk | Intensity | Urgency | Verification |\n");
+    md.push_str("|---|---|---|---|---|---|---|\n");
+
+    let mut n_low = 0u32;
+    let mut n_med = 0u32;
+    let mut n_high = 0u32;
+    let mut n_passed = 0u32;
+
+    for (i, (case, result)) in cases.iter().zip(results.iter()).enumerate() {
+        let risk = &result.telemetry.intent_matrix.manipulation_risk;
+        let intensity = result.telemetry.affective_telemetry.emotional_intensity;
+        let urgency = result.telemetry.cognitive_state.urgency_vector;
+        let verdict = if result.verification.passed { "✓ passed" } else { "✗ flagged" };
+        match risk.as_str() {
+            "high"   => n_high += 1,
+            "medium" => n_med  += 1,
+            _        => n_low  += 1,
+        }
+        if result.verification.passed { n_passed += 1; }
+        md.push_str(&format!(
+            "| {} | {} | {} | **{}** | {:.2} | {:.2} | {} |\n",
+            i + 1, case.label, case.category, risk, intensity, urgency, verdict
+        ));
+    }
+
+    let total = cases.len();
+    md.push_str("\n## Summary\n\n");
+    md.push_str(&format!("- **{total} scenarios analyzed**\n"));
+    md.push_str(&format!("- Risk distribution: {n_low} low / {n_med} medium / {n_high} high\n"));
+    md.push_str(&format!("- Verification: {n_passed}/{total} passed\n"));
+    md.push_str("\n---\n");
+    md.push_str("\n> Generated by [split-brain-harness](https://github.com/bigblue-r4/split-brain-harness)\n");
+
+    let mut f = std::fs::File::create(path)
+        .with_context(|| format!("cannot create export file: {path}"))?;
+    f.write_all(md.as_bytes())?;
+    eprintln!("  exported: {path}");
     Ok(())
 }
 
@@ -1590,7 +1694,7 @@ mod tests {
     fn parse_demo_offline_flag() {
         let a = args(&["sbh", "demo", "--offline"]);
         match parse_command(&a).unwrap() {
-            Command::Demo { offline, raw, pause } => {
+            Command::Demo { offline, raw, pause, .. } => {
                 assert!(offline);
                 assert!(!raw);
                 assert!(!pause);
@@ -1730,9 +1834,11 @@ mod tests {
     fn parse_serve_default_listen() {
         let a = args(&["sbh", "serve"]);
         match parse_command(&a).unwrap() {
-            Command::Serve { listen, session_log } => {
+            Command::Serve { listen, session_log, tls_cert, tls_key } => {
                 assert_eq!(listen, "127.0.0.1:8088");
                 assert!(session_log.is_none());
+                assert!(tls_cert.is_none());
+                assert!(tls_key.is_none());
             }
             _ => panic!("expected Serve"),
         }
@@ -1755,6 +1861,30 @@ mod tests {
                 assert_eq!(session_log.as_deref(), Some("/tmp/sessions.jsonl"));
             }
             _ => panic!("expected Serve"),
+        }
+    }
+
+    #[test]
+    fn parse_serve_tls_flags() {
+        let a = args(&["sbh", "serve", "--tls-cert", "/etc/sbh/cert.pem", "--tls-key", "/etc/sbh/key.pem"]);
+        match parse_command(&a).unwrap() {
+            Command::Serve { tls_cert, tls_key, .. } => {
+                assert_eq!(tls_cert.as_deref(), Some("/etc/sbh/cert.pem"));
+                assert_eq!(tls_key.as_deref(), Some("/etc/sbh/key.pem"));
+            }
+            _ => panic!("expected Serve"),
+        }
+    }
+
+    #[test]
+    fn parse_demo_export_flag() {
+        let a = args(&["sbh", "demo", "--offline", "--export", "demo.md"]);
+        match parse_command(&a).unwrap() {
+            Command::Demo { offline, export, .. } => {
+                assert!(offline);
+                assert_eq!(export.as_deref(), Some("demo.md"));
+            }
+            _ => panic!("expected Demo"),
         }
     }
 
