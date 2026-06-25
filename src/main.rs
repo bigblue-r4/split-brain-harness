@@ -372,25 +372,102 @@ async fn cmd_analyze(
 }
 
 fn print_result(result: &HarnessResult, raw: bool, show_trace: bool) -> Result<()> {
-    let output = if show_trace {
-        if raw {
-            serde_json::to_string(result)?
+    if raw || show_trace {
+        let output = if show_trace {
+            if raw {
+                serde_json::to_string(result)?
+            } else {
+                serde_json::to_string_pretty(result)?
+            }
         } else {
-            serde_json::to_string_pretty(result)?
-        }
+            serde_json::to_string(result)?
+        };
+        println!("{output}");
+        return Ok(());
+    }
+
+    // Pretty ANSI card — only when stdout is a tty
+    use std::io::IsTerminal;
+    if std::io::stdout().is_terminal() {
+        print_result_pretty(result);
     } else {
+        // Non-tty pipeline: emit compact JSON
         let slim = serde_json::json!({
             "telemetry":    result.telemetry,
             "verification": result.verification,
         });
-        if raw {
-            serde_json::to_string(&slim)?
-        } else {
-            serde_json::to_string_pretty(&slim)?
-        }
-    };
-    println!("{output}");
+        println!("{}", serde_json::to_string(&slim)?);
+    }
     Ok(())
+}
+
+fn print_result_pretty(r: &HarnessResult) {
+    // ANSI helpers — raw escapes, no extra deps
+    const R: &str = "\x1b[0m";
+    const BOLD: &str = "\x1b[1m";
+    const DIM: &str = "\x1b[2m";
+    const RED: &str = "\x1b[31m";
+    const GREEN: &str = "\x1b[32m";
+    const YELLOW: &str = "\x1b[33m";
+    const CYAN: &str = "\x1b[36m";
+    const WHITE: &str = "\x1b[97m";
+
+    let risk = r.telemetry.intent_matrix.manipulation_risk.as_str();
+    let (risk_color, risk_label, risk_bar) = match risk {
+        "high" => (RED, "HIGH  ⚠", "██████████████████████████████"),
+        "medium" => (YELLOW, "MED   ▲", "████████████████░░░░░░░░░░░░░░"),
+        _ => (GREEN, "LOW   ✓", "████░░░░░░░░░░░░░░░░░░░░░░░░░░"),
+    };
+    let conf = r.verification.confidence;
+    let conf_color = if conf > 0.7 { GREEN } else if conf > 0.4 { YELLOW } else { RED };
+    let tone = r.telemetry.affective_telemetry.structural_tone.join(", ");
+    let rule = "─".repeat(54);
+
+    println!("{DIM}{rule}{R}");
+    println!(
+        "  {BOLD}RISK{R}       {risk_color}{BOLD}{risk_label}{R}  {risk_color}{risk_bar}{R}"
+    );
+    println!("{DIM}{rule}{R}");
+    println!(
+        "  {DIM}emotion{R}    {WHITE}{}{R}",
+        r.telemetry.affective_telemetry.primary_emotion
+    );
+    println!(
+        "  {DIM}intensity{R}  {WHITE}{:.2}{R}    {DIM}urgency{R}   {WHITE}{:.2}{R}    {DIM}coherence{R}  {WHITE}{:.2}{R}",
+        r.telemetry.affective_telemetry.emotional_intensity,
+        r.telemetry.cognitive_state.urgency_vector,
+        r.telemetry.cognitive_state.coherence_rating,
+    );
+    if !tone.is_empty() {
+        println!("  {DIM}tone{R}       {WHITE}{tone}{R}");
+    }
+    println!();
+    println!(
+        "  {DIM}objective{R}  {CYAN}{}{R}",
+        r.telemetry.intent_matrix.stated_objective
+    );
+    println!(
+        "  {DIM}subtext{R}    {}",
+        r.telemetry.intent_matrix.subtextual_motive
+    );
+    println!("{DIM}{rule}{R}");
+    let supported = if r.verification.passed { "passed" } else { "flagged" };
+    let sas = if r.verification.stop_and_ask {
+        format!("  {RED}{BOLD}⚠  stop_and_ask{R}")
+    } else {
+        String::new()
+    };
+    println!(
+        "  {DIM}verification{R}  {supported}  {DIM}conf:{R} {conf_color}{conf:.2}{R}{sas}"
+    );
+    if r.verification.consistency_flags.is_empty() {
+        println!("  {DIM}flags{R}         none");
+    } else {
+        for flag in &r.verification.consistency_flags {
+            println!("  {RED}▸{R} {flag}");
+        }
+    }
+    println!("{DIM}{rule}{R}");
 }
 
 // ---------------------------------------------------------------------------
