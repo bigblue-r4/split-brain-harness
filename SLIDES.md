@@ -109,16 +109,10 @@ Evaluated on three public adversarial datasets · **llama3.2:3b · local Ollama 
 | TrustAI Jailbreaks | 1,398 | — | — | **94.8% flagged** | Unlabeled |
 | Deepset Prompt Injections | 546 | 0.81 | 0.37 | 0.51 | 3B local model limit† |
 
-<br>
+**Stage 0 normalizer** catches 50% of CyberEC encoding-evasion FNs:
+homoglyphs · base64 · Morse · backslash-escape · fullwidth · leet
 
-**Stage 0 normalizer** catches 50% of CyberEC encoding-evasion false negatives:
-homoglyphs · base64 · Morse code · backslash-escape · fullwidth Unicode · leet
-
-<br>
-
-<span class="dim">† Recall on Deepset improves substantially with a capable backend (Claude/GPT-4).
-Indirect/roleplay injections require multi-hop reasoning beyond a 3B model.
-Precision (false-alarm rate) is backend-independent.</span>
+<span class="dim">† Deepset recall improves with capable backend (Claude/GPT-4). Precision is backend-independent.</span>
 
 ---
 
@@ -154,24 +148,17 @@ sbh demo --serve --offline     # 5-turn slow-boil foreign adversary escalation
 
 ## DHS SBIR Phase 1
 
-<br>
-
 ### What we're building
-
-A hardened, air-gap-deployable AI security infrastructure layer for government and cleared-contractor LLM deployments — with a tamper-evident audit trail, session-level threat detection, and a sandboxed tool execution runtime.
-
-<br>
+A hardened, air-gap-deployable AI security layer for government LLM deployments — tamper-evident audit trail, session-level threat detection, sandboxed tool execution.
 
 ### Phase 1 milestones (~$300K · 6 months)
 
 | Milestone | Deliverable |
 |---|---|
-| M1 | Full benchmark suite against DHS-relevant labeled datasets |
-| M2 | Hardened `sbh serve` proxy with FedRAMP-aligned audit controls |
-| M3 | Stage 0 normalizer v2 — full Unicode TR39 confusables, entropy scoring |
+| M1 | Benchmark suite against DHS-relevant labeled datasets |
+| M2 | Hardened `sbh serve` with FedRAMP-aligned audit controls |
+| M3 | Normalizer v2 — full Unicode TR39 confusables, entropy scoring |
 | M4 | Red-team evaluation by independent cleared assessor |
 | M5 | Open-source release + technical report |
-
-<br>
 
 **SGAIL** · trentdoosday@gmail.com · github.com/bigblue-r4/split-brain-harness
