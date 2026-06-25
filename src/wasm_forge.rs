@@ -672,10 +672,11 @@ fn shape_token(contract: &str) -> String {
 }
 
 fn monotonic_id() -> String {
+    let pid = std::process::id();
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| format!("{}{}", d.as_secs(), d.subsec_nanos()))
-        .unwrap_or_else(|_| "0".into())
+        .map(|d| format!("{}-{}{}", pid, d.as_secs(), d.subsec_nanos()))
+        .unwrap_or_else(|_| format!("{}-0", pid))
 }
 
 // ---------------------------------------------------------------------------

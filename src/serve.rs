@@ -106,6 +106,72 @@ const SESSION_TTL: Duration = Duration::from_secs(30 * 60);
 /// Maximum number of concurrent sessions held in memory. New sessions beyond
 /// this cap are refused rather than allowing unbounded HashMap growth.
 const SESSION_MAX_COUNT: usize = 10_000;
+/// Background sweep interval for evicting expired sessions.
+/// The per-request path no longer calls retain() — O(1) instead of O(N).
+const SESSION_SWEEP_INTERVAL: Duration = Duration::from_secs(5 * 60);
+
+// ---------------------------------------------------------------------------
+// Rate limiter — 16-shard sliding window, no extra deps
+// ---------------------------------------------------------------------------
+
+const RATE_LIMITER_SHARDS: usize = 16;
+/// Hard cap on total tracked IPs across all shards. Beyond this, new IPs
+/// are passed through untracked rather than allocating unbounded memory.
+const MAX_TRACKED_IPS: usize = 50_000;
+const MAX_IPS_PER_SHARD: usize = MAX_TRACKED_IPS / RATE_LIMITER_SHARDS;
+
+struct ShardedRateLimiter {
+    shards: Box<[Mutex<HashMap<IpAddr, VecDeque<Instant>>>; RATE_LIMITER_SHARDS]>,
+}
+
+impl ShardedRateLimiter {
+    fn new() -> Self {
+        Self {
+            shards: Box::new(std::array::from_fn(|_| Mutex::new(HashMap::new()))),
+        }
+    }
+
+    fn shard_idx(ip: IpAddr) -> usize {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        ip.hash(&mut h);
+        (h.finish() as usize) % RATE_LIMITER_SHARDS
+    }
+
+    fn check(&self, ip: IpAddr, max_per_minute: u32) -> bool {
+        let idx = Self::shard_idx(ip);
+        let now = Instant::now();
+        let window = Duration::from_secs(60);
+        let mut shard = self.shards[idx].lock().unwrap_or_else(|e| e.into_inner());
+        let is_new = !shard.contains_key(&ip);
+        if is_new && shard.len() >= MAX_IPS_PER_SHARD {
+            // Shard full — try to evict one expired entry first.
+            // If none are expired, pass request through untracked: a sustained
+            // attack filling all shards still hits per-session caps.
+            let expired = shard
+                .iter()
+                .find(|(_, q)| q.back().map_or(true, |&t| now.duration_since(t) > window))
+                .map(|(k, _)| *k);
+            match expired {
+                Some(evict) => { shard.remove(&evict); }
+                None => return true,
+            }
+        }
+        let queue = shard.entry(ip).or_default();
+        while let Some(&front) = queue.front() {
+            if now.duration_since(front) > window {
+                queue.pop_front();
+            } else {
+                break;
+            }
+        }
+        if queue.len() >= max_per_minute as usize {
+            return false;
+        }
+        queue.push_back(now);
+        true
+    }
+}
 
 /// One analyzed turn in a session, recording the risk signals.
 #[derive(Debug, Clone)]
@@ -282,8 +348,8 @@ impl Metrics {
 #[derive(Clone)]
 pub struct ServeState {
     config: Arc<Config>,
-    /// Per-IP sliding window: timestamps of requests in the last minute.
-    rate_limiter: Arc<Mutex<HashMap<IpAddr, VecDeque<Instant>>>>,
+    /// Per-IP sliding window — sharded to avoid global lock contention.
+    rate_limiter: Arc<ShardedRateLimiter>,
     /// Per-session turn history for multi-turn escalation detection.
     sessions: Arc<Mutex<HashMap<String, SessionHistory>>>,
     /// Path to append-only session escalation log. Written on every escalation event.
@@ -295,33 +361,6 @@ pub struct ServeState {
     /// Cached witness status, refreshed every 30s by a background task.
     /// "active" | "inactive" | "not-configured"
     witness_status: Arc<std::sync::atomic::AtomicU8>,
-}
-
-// ---------------------------------------------------------------------------
-// Rate limiter — sliding window, no extra deps
-// ---------------------------------------------------------------------------
-
-fn check_rate_limit(
-    limiter: &Arc<Mutex<HashMap<IpAddr, VecDeque<Instant>>>>,
-    ip: IpAddr,
-    max_per_minute: u32,
-) -> bool {
-    let now = Instant::now();
-    let window = Duration::from_secs(60);
-    let mut map = limiter.lock().unwrap_or_else(|e| e.into_inner());
-    let queue = map.entry(ip).or_default();
-    while let Some(&front) = queue.front() {
-        if now.duration_since(front) > window {
-            queue.pop_front();
-        } else {
-            break;
-        }
-    }
-    if queue.len() >= max_per_minute as usize {
-        return false;
-    }
-    queue.push_back(now);
-    true
 }
 
 // ---------------------------------------------------------------------------
@@ -356,7 +395,7 @@ async fn chat_completions(
             return (
                 StatusCode::UNAUTHORIZED,
                 HeaderMap::new(),
-                Json(serde_json::to_value(body).unwrap()),
+                Json(serde_json::to_value(body).unwrap_or_else(|_| serde_json::json!({"error":{"message":"serialization error","type":"internal_error"}}))),
             )
                 .into_response();
         }
@@ -364,7 +403,7 @@ async fn chat_completions(
 
     // --- per-IP rate limit ---
     let ip = remote_addr.ip();
-    if !check_rate_limit(&state.rate_limiter, ip, config.serve_rate_limit) {
+    if !state.rate_limiter.check(ip, config.serve_rate_limit) {
         Metrics::inc(&state.metrics.rate_limit_total);
         Metrics::inc(&state.metrics.requests_error_total);
         let body = ErrorBody {
@@ -379,7 +418,7 @@ async fn chat_completions(
         return (
             StatusCode::TOO_MANY_REQUESTS,
             HeaderMap::new(),
-            Json(serde_json::to_value(body).unwrap()),
+            Json(serde_json::to_value(body).unwrap_or_else(|_| serde_json::json!({"error":{"message":"serialization error","type":"internal_error"}}))),
         )
             .into_response();
     }
@@ -395,7 +434,7 @@ async fn chat_completions(
         return (
             StatusCode::BAD_REQUEST,
             HeaderMap::new(),
-            Json(serde_json::to_value(body).unwrap()),
+            Json(serde_json::to_value(body).unwrap_or_else(|_| serde_json::json!({"error":{"message":"serialization error","type":"internal_error"}}))),
         )
             .into_response();
     }
@@ -419,7 +458,7 @@ async fn chat_completions(
         return (
             StatusCode::BAD_REQUEST,
             HeaderMap::new(),
-            Json(serde_json::to_value(body).unwrap()),
+            Json(serde_json::to_value(body).unwrap_or_else(|_| serde_json::json!({"error":{"message":"serialization error","type":"internal_error"}}))),
         )
             .into_response();
     }
@@ -476,7 +515,7 @@ async fn chat_completions(
             return (
                 status,
                 HeaderMap::new(),
-                Json(serde_json::to_value(body).unwrap()),
+                Json(serde_json::to_value(body).unwrap_or_else(|_| serde_json::json!({"error":{"message":"serialization error","type":"internal_error"}}))),
             )
                 .into_response();
         }
@@ -486,7 +525,13 @@ async fn chat_completions(
     let (session_turn_count, session_escalating, session_log_info) = {
         let mut sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
         let now = Instant::now();
-        sessions.retain(|_, h| now.duration_since(h.last_seen) < SESSION_TTL);
+        // Lazy TTL: evict only the accessed session if it has expired.
+        // Full map cleanup runs in the background sweeper — no O(N) walk per request.
+        if let Some(h) = sessions.get(&session_id) {
+            if now.duration_since(h.last_seen) >= SESSION_TTL {
+                sessions.remove(&session_id);
+            }
+        }
         // Refuse new sessions beyond the cap to prevent memory DoS.
         let is_new = !sessions.contains_key(&session_id);
         if is_new && sessions.len() >= SESSION_MAX_COUNT {
@@ -601,7 +646,7 @@ async fn chat_completions(
     (
         StatusCode::OK,
         resp_headers,
-        Json(serde_json::to_value(response_body).unwrap()),
+        Json(serde_json::to_value(response_body).unwrap_or_else(|_| serde_json::json!({"error":{"message":"serialization error","type":"internal_error"}}))),
     )
         .into_response()
 }
@@ -670,10 +715,27 @@ pub async fn run_server(listen: &str, config: Config, tls_cert: Option<&str>, tl
         spawn_witness_poller(Arc::clone(&witness_cache));
     }
 
+    let sessions: Arc<Mutex<HashMap<String, SessionHistory>>> =
+        Arc::new(Mutex::new(HashMap::new()));
+
+    // Background task: sweep expired sessions every SESSION_SWEEP_INTERVAL.
+    // The hot path no longer calls retain() — this is the only full-map walk.
+    {
+        let sessions_sweep = Arc::clone(&sessions);
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(SESSION_SWEEP_INTERVAL).await;
+                let mut map = sessions_sweep.lock().unwrap_or_else(|e| e.into_inner());
+                let now = Instant::now();
+                map.retain(|_, h| now.duration_since(h.last_seen) < SESSION_TTL);
+            }
+        });
+    }
+
     let state = ServeState {
         config: Arc::new(config),
-        rate_limiter: Arc::new(Mutex::new(HashMap::new())),
-        sessions: Arc::new(Mutex::new(HashMap::new())),
+        rate_limiter: Arc::new(ShardedRateLimiter::new()),
+        sessions,
         session_log_path: session_log_path.clone(),
         metrics: Arc::new(Metrics::default()),
         start_time: Arc::new(Instant::now()),
@@ -978,24 +1040,24 @@ mod tests {
 
     #[test]
     fn rate_limit_allows_up_to_max() {
-        let limiter = Arc::new(Mutex::new(HashMap::new()));
+        let limiter = ShardedRateLimiter::new();
         let ip: IpAddr = "127.0.0.1".parse().unwrap();
         for _ in 0..5 {
-            assert!(check_rate_limit(&limiter, ip, 5));
+            assert!(limiter.check(ip, 5));
         }
-        assert!(!check_rate_limit(&limiter, ip, 5));
+        assert!(!limiter.check(ip, 5));
     }
 
     #[test]
     fn rate_limit_different_ips_are_independent() {
-        let limiter = Arc::new(Mutex::new(HashMap::new()));
+        let limiter = ShardedRateLimiter::new();
         let ip1: IpAddr = "10.0.0.1".parse().unwrap();
         let ip2: IpAddr = "10.0.0.2".parse().unwrap();
         for _ in 0..3 {
-            assert!(check_rate_limit(&limiter, ip1, 3));
+            assert!(limiter.check(ip1, 3));
         }
-        assert!(!check_rate_limit(&limiter, ip1, 3));
-        assert!(check_rate_limit(&limiter, ip2, 3));
+        assert!(!limiter.check(ip1, 3));
+        assert!(limiter.check(ip2, 3));
     }
 
     #[test]
