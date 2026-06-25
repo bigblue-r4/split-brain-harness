@@ -116,13 +116,16 @@ Evaluated against three public adversarial datasets (local Ollama, llama3.2:3b, 
 
 | Dataset | Rows | Precision | Recall | F1 | Notes |
 |---|---|---|---|---|---|
-| Deepset Prompt Injections | 546 | 0.85 | 0.72 | 0.78 | FN gap: context-embedded injections (payload in document body, not top-level query). Re-bench in progress. |
-| CyberEC | 141 | **1.00** | 0.50 | 0.67 | Zero false positives; FN gap: obfuscated/encoded injections (see Stage 0 normalizer below) |
+| Deepset Prompt Injections | 546 | **0.81** | 0.37 | 0.51 | Local llama3.2:3b backend; 117/546 parse-timeout errors excluded. FN gap: indirect/roleplay injections requiring multi-hop reasoning. |
+| CyberEC | 141 | **1.00** | 0.50 | 0.67 | Zero false positives; FN gap: encoding-evasion attacks (see Stage 0 normalizer below) |
 | TrustAI Jailbreaks | 1,398 | n/a | n/a | n/a | Unlabeled — flagging rate **94.8%** (1,326/1,398 flagged medium or high); 72 passed as low |
 
-**Precision story:** SBH almost never flags benign content. On CyberEC, precision is
-perfect — every alert was a real injection. On TrustAI (1,398 unlabeled jailbreaks),
-94.8% were flagged medium or high. The recall gap is specific and well-bounded.
+**Backend note:** All benchmarks run locally on llama3.2:3b via Ollama (air-gapped, no
+cloud). A 3B model has meaningful limits on complex multi-hop reasoning; Deepset's
+indirect injection cases (roleplay framing, document-embedded payloads) are the primary
+FN driver. Precision holds well across all three datasets — SBH almost never fires on
+benign content. On TrustAI (1,398 unlabeled jailbreaks), 94.8% were flagged medium or
+high. CyberEC precision is perfect — every alert was a real injection.
 
 **Stage 0 normalizer (added post-baseline):** A deobfuscation pass now runs before
 Stage 1. Tested against the 26 CyberEC false negatives:

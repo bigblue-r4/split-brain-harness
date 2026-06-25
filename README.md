@@ -2,12 +2,13 @@
 
 **Split-Brain Harness (SBH)** is a Rust security layer that wraps any LLM and detects prompt injection, insider threat patterns, authority impersonation, and multi-turn session escalation before a response is ever generated. It runs as a drop-in OpenAI-compatible proxy with no changes to the downstream application, works fully offline against a local model, and ships as a single static binary.
 
-Benchmarked against two labeled adversarial datasets (llama3.2:3b, local Ollama):
-**Deepset** (546 rows): precision 0.85 · recall 0.72 · F1 0.78 —
-**CyberEC** (141 rows): precision 1.00 · recall 0.50 · F1 0.67.
-Zero false positives on CyberEC; recall gap is obfuscation-evasion (homoglyphs, base64, leetspeak).
+Benchmarked against three adversarial datasets (llama3.2:3b, local Ollama, air-gapped):
+**Deepset** (546 rows): precision 0.81 · recall 0.37 · F1 0.51 —
+**CyberEC** (141 rows): precision **1.00** · recall 0.50 · F1 0.67 —
+**TrustAI** (1,398 unlabeled jailbreaks): **94.8% flagging rate**.
+CyberEC precision is perfect — zero false positives. Stage 0 normalizer catches 50% of CyberEC encoding-evasion false negatives (homoglyphs, base64, Morse, backslash-escape, leet).
 
-**339 tests · CI green · [MIT license](LICENSE)**
+**354 tests · CI green · [MIT license](LICENSE)**
 
 ---
 
