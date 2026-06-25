@@ -15,6 +15,7 @@ pub mod policy;
 pub mod rag;
 pub mod regenerative_forge;
 pub mod reputation;
+#[cfg(feature = "serve")]
 pub mod serve;
 pub mod session_log;
 pub mod soul;

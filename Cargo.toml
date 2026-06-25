@@ -1,21 +1,33 @@
 [package]
-name = "split-brain-harness"
-version = "0.1.0"
-edition = "2021"
+name        = "split-brain-harness"
+version     = "1.0.0"
+edition     = "2021"
+description = "Soul-injected two-stage LLM telemetry pipeline. Wraps any LLM with affective/intent/cognitive analysis, deterministic verification, and a Stage 0 deobfuscation normalizer. Drop-in OpenAI-compatible proxy."
+license     = "MIT"
+repository  = "https://github.com/bigblue-r4/split-brain-harness"
+keywords    = ["llm", "security", "ai-safety", "prompt-injection", "telemetry"]
+categories  = ["asynchronous", "network-programming", "web-programming"]
+readme      = "README.md"
+
+[features]
+default     = ["serve"]
+serve       = ["dep:axum", "dep:axum-server"]
+monitor     = ["dep:ratatui", "dep:crossterm"]
+live-tests  = []
 
 [dependencies]
-tokio       = { version = "1.38", features = ["full"] }
-reqwest     = { version = "0.12", features = ["json"] }
-serde       = { version = "1.0",  features = ["derive"] }
-serde_json  = "1.0"
-async-trait = "0.1"
-anyhow      = "1.0"
-toml        = { version = "0.8", default-features = false, features = ["parse"] }
-ratatui     = "0.29"
-crossterm   = "0.28"
-axum        = { version = "0.7", features = ["json"] }
-axum-server = { version = "0.7", features = ["tls-rustls"] }
-base64      = "0.22"
+tokio        = { version = "1.38", features = ["full"] }
+reqwest      = { version = "0.12", features = ["json"] }
+serde        = { version = "1.0",  features = ["derive"] }
+serde_json   = "1.0"
+async-trait  = "0.1"
+anyhow       = "1.0"
+toml         = { version = "0.8", default-features = false, features = ["parse"] }
+base64       = "0.22"
+axum         = { version = "0.7", features = ["json"], optional = true }
+axum-server  = { version = "0.7", features = ["tls-rustls"], optional = true }
+ratatui      = { version = "0.29", optional = true }
+crossterm    = { version = "0.28", optional = true }
 
 [[bin]]
 name = "split-brain-harness"
@@ -24,6 +36,7 @@ path = "src/main.rs"
 [[bin]]
 name = "sbh-monitor"
 path = "src/bin/monitor.rs"
+required-features = ["monitor"]
 
 [lib]
 name = "split_brain_harness"
@@ -31,6 +44,3 @@ path = "src/lib.rs"
 
 [dev-dependencies]
 tempfile = "3"
-
-[features]
-live-tests = []
