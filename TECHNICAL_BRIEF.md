@@ -133,8 +133,8 @@ Stage 1. Tested against the 26 CyberEC false negatives:
 | Backslash-escaped text | 3 | ✓ all |
 | Fullwidth Unicode characters | 1 | ✓ |
 | Leetspeak in mixed-alpha tokens | 3 | ✓ all |
-| **Normalizer total** | **12/26** | **46% of prior FNs flipped** |
-| Morse code encoding | 1 | ✗ (planned) |
+| Morse code encoding | 1 | ✓ |
+| **Normalizer total** | **13/26** | **50% of prior FNs flipped** |
 | Semantic jailbreaks / direct instructions | 8 | ✗ (LLM Stage 1 handles) |
 | Indirect injection (logic framing, split strings) | 3 | ✗ (LLM Stage 1 handles) |
 | Likely mislabeled (benign questions in dataset) | 2 | n/a |
@@ -142,7 +142,6 @@ Stage 1. Tested against the 26 CyberEC false negatives:
 **Remaining blind spots:**
 - Context-embedded injections (payload buried inside a document body)
 - Purely semantic attacks with no encoding (DAN jailbreaks, split-string, acronym substitution)
-- Morse code (one occurrence in dataset; decoder planned)
 
 ---
 
