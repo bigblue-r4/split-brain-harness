@@ -15,7 +15,15 @@
 /// (enforced by static analysis in Phase 3).
 use std::io::Write as _;
 use std::process::{Command, Stdio};
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+/// Hard wall-clock limit on rustc compilation. Model-generated code is stdlib-only
+/// so 60 s is generous; pathological macro/trait-resolution abuse gets cut off here.
+const COMPILE_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Hard wall-clock limit passed directly to the wasmtime `-W timeout=` flag.
+/// Must be >= the capability constraint max (10 000 ms) and expressed as ms string.
+const WASM_EXEC_TIMEOUT_MS: u64 = 15_000;
 
 use serde::{Deserialize, Serialize};
 
@@ -177,11 +185,47 @@ impl WasmCompiler for RustcCompiler {
         }
 
         let start = Instant::now();
-        let result = Command::new("rustc")
+
+        // Spawn rustc as a child so we can enforce a wall-clock timeout.
+        let child = Command::new("rustc")
             .args(["--target", target, "--edition", "2021", "-o"])
             .arg(&wasm_path)
             .arg(&src_path)
-            .output();
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn();
+
+        let child = match child {
+            Err(e) => {
+                let _ = std::fs::remove_file(&src_path);
+                let _ = std::fs::remove_dir_all(&tmp_dir);
+                return CompileOutcome::CompilerNotFound {
+                    error: format!("could not spawn rustc: {e}"),
+                };
+            }
+            Ok(c) => c,
+        };
+
+        // Move child into a thread; wait for output or kill after COMPILE_TIMEOUT.
+        let pid = child.id();
+        let (tx, rx) = std::sync::mpsc::channel::<std::io::Result<std::process::Output>>();
+        std::thread::spawn(move || { let _ = tx.send(child.wait_with_output()); });
+
+        let result = match rx.recv_timeout(COMPILE_TIMEOUT) {
+            Ok(r) => r,
+            Err(_) => {
+                // Kill the rustc process by PID — it's already moved into the thread,
+                // so we signal it via the OS. Cleanup is best-effort.
+                let _ = Command::new("kill").args(["-9", &pid.to_string()]).status();
+                let _ = std::fs::remove_file(&src_path);
+                let _ = std::fs::remove_dir_all(&tmp_dir);
+                return CompileOutcome::CompilationFailed {
+                    stderr: format!("rustc timed out after {}s", COMPILE_TIMEOUT.as_secs()),
+                    compilation_ms: COMPILE_TIMEOUT.as_millis() as u64,
+                };
+            }
+        };
+
         let compilation_ms = start.elapsed().as_millis() as u64;
 
         // Remove source immediately (never persist model-generated code)
@@ -191,7 +235,7 @@ impl WasmCompiler for RustcCompiler {
             Err(e) => {
                 let _ = std::fs::remove_dir_all(&tmp_dir);
                 CompileOutcome::CompilerNotFound {
-                    error: format!("could not spawn rustc: {e}"),
+                    error: format!("rustc wait error: {e}"),
                 }
             }
             Ok(out) if !out.status.success() => {
@@ -257,6 +301,7 @@ impl WasmExecutor for WasmtimeCli {
         // deleting first would cause a race where wasmtime tries to open a
         // file that no longer exists.
         let spawn_result = Command::new("wasmtime")
+            .arg(format!("-W timeout={WASM_EXEC_TIMEOUT_MS}ms"))
             .arg("--")
             .arg(&tmp_wasm)
             .stdin(Stdio::piped())

@@ -103,6 +103,9 @@ struct ErrorDetail {
 
 const SESSION_MAX_TURNS: usize = 10;
 const SESSION_TTL: Duration = Duration::from_secs(30 * 60);
+/// Maximum number of concurrent sessions held in memory. New sessions beyond
+/// this cap are refused rather than allowing unbounded HashMap growth.
+const SESSION_MAX_COUNT: usize = 10_000;
 
 /// One analyzed turn in a session, recording the risk signals.
 #[derive(Debug, Clone)]
@@ -192,6 +195,47 @@ fn risk_score(risk: &str) -> f64 {
 }
 
 // ---------------------------------------------------------------------------
+// Witness status cache — polled every 30 s by a background task
+// ---------------------------------------------------------------------------
+
+const WITNESS_ACTIVE: u8 = 0;
+const WITNESS_INACTIVE: u8 = 1;
+const WITNESS_UNCONFIGURED: u8 = 2;
+
+fn witness_status_str(v: u8) -> &'static str {
+    match v {
+        WITNESS_ACTIVE => "active",
+        WITNESS_INACTIVE => "inactive",
+        _ => "not-configured",
+    }
+}
+
+/// Spawn a background task that polls `witness status` once at startup and
+/// every 30 seconds thereafter. The result is stored in `cache` (an AtomicU8)
+/// so that the hot request path never blocks on a subprocess.
+///
+/// Only spawned when `audit_path` is Some — otherwise status is fixed to
+/// WITNESS_UNCONFIGURED.
+fn spawn_witness_poller(cache: Arc<std::sync::atomic::AtomicU8>) {
+    tokio::spawn(async move {
+        loop {
+            let result = tokio::process::Command::new("witness")
+                .arg("status")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .await;
+            let val = match result {
+                Ok(s) if s.success() => WITNESS_ACTIVE,
+                _ => WITNESS_INACTIVE,
+            };
+            cache.store(val, std::sync::atomic::Ordering::Relaxed);
+            tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Metrics — lock-free counters, Prometheus text exposition
 // ---------------------------------------------------------------------------
 
@@ -248,6 +292,9 @@ pub struct ServeState {
     metrics: Arc<Metrics>,
     /// Timestamp of server start, used to compute uptime.
     start_time: Arc<Instant>,
+    /// Cached witness status, refreshed every 30s by a background task.
+    /// "active" | "inactive" | "not-configured"
+    witness_status: Arc<std::sync::atomic::AtomicU8>,
 }
 
 // ---------------------------------------------------------------------------
@@ -261,7 +308,7 @@ fn check_rate_limit(
 ) -> bool {
     let now = Instant::now();
     let window = Duration::from_secs(60);
-    let mut map = limiter.lock().unwrap();
+    let mut map = limiter.lock().unwrap_or_else(|e| e.into_inner());
     let queue = map.entry(ip).or_default();
     while let Some(&front) = queue.front() {
         if now.duration_since(front) > window {
@@ -392,13 +439,18 @@ async fn chat_completions(
         }
     }
 
-    // --- session ID: echo from client or mint a new one ---
+    // --- session ID: validate client-supplied or mint a cryptographically random one ---
     let session_id = headers
         .get("x-sbh-session")
         .and_then(|v| v.to_str().ok())
-        .filter(|s| !s.is_empty() && s.len() <= 64)
+        // Only accept IDs that are safe for HTTP headers and won't enable enumeration
+        .filter(|s| {
+            !s.is_empty()
+                && s.len() <= 64
+                && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        })
         .map(|s| s.to_string())
-        .unwrap_or_else(|| format!("sbh-s-{}", monotonic_id()));
+        .unwrap_or_else(mint_session_id);
 
     // --- run the full harness pipeline ---
     let result = match analyze(user_input, &cfg).await {
@@ -432,9 +484,27 @@ async fn chat_completions(
 
     // --- session tracking: push turn, check for escalation, evict stale ---
     let (session_turn_count, session_escalating, session_log_info) = {
-        let mut sessions = state.sessions.lock().unwrap();
+        let mut sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner());
         let now = Instant::now();
         sessions.retain(|_, h| now.duration_since(h.last_seen) < SESSION_TTL);
+        // Refuse new sessions beyond the cap to prevent memory DoS.
+        let is_new = !sessions.contains_key(&session_id);
+        if is_new && sessions.len() >= SESSION_MAX_COUNT {
+            drop(sessions);
+            Metrics::inc(&state.metrics.requests_error_total);
+            let body = ErrorBody {
+                error: ErrorDetail {
+                    message: "session capacity reached — retry later".into(),
+                    kind: "capacity_error".into(),
+                },
+            };
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                HeaderMap::new(),
+                Json(serde_json::to_value(body).unwrap_or_else(|_| serde_json::json!({}))),
+            )
+                .into_response();
+        }
         let hist = sessions.entry(session_id.clone()).or_insert_with(SessionHistory::new);
         hist.push(&result.telemetry.intent_matrix.manipulation_risk);
         let escalating = hist.is_escalating();
@@ -506,23 +576,10 @@ async fn chat_completions(
         "x-sbh-version",
         HeaderValue::from_static(env!("CARGO_PKG_VERSION")),
     );
-    // Indicate whether the forge audit log is being witnessed
-    let witness_status = if cfg.audit_path.is_some() {
-        let running = std::process::Command::new("witness")
-            .arg("status")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-        if running {
-            "active"
-        } else {
-            "inactive"
-        }
-    } else {
-        "not-configured"
-    };
+    // Witness status is refreshed every 30s by a background task — zero blocking here.
+    let witness_status = witness_status_str(
+        state.witness_status.load(std::sync::atomic::Ordering::Relaxed),
+    );
     if let Ok(val) = HeaderValue::from_str(witness_status) {
         resp_headers.insert("x-sbh-witness", val);
     }
@@ -553,8 +610,29 @@ async fn chat_completions(
 // Metrics endpoint — Prometheus text exposition format
 // ---------------------------------------------------------------------------
 
-async fn metrics_handler(State(state): State<ServeState>) -> impl IntoResponse {
-    let active_sessions = state.sessions.lock().unwrap().len();
+async fn metrics_handler(
+    State(state): State<ServeState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    // /metrics is protected by the same bearer key as the main endpoint.
+    // Without this, an unauthenticated observer can read request rates,
+    // escalation counts, and active session count.
+    if let Some(sk) = &state.config.serve_key {
+        let provided = headers
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.trim_start_matches("Bearer ").trim().to_string())
+            .unwrap_or_default();
+        if &provided != sk {
+            return (
+                StatusCode::UNAUTHORIZED,
+                [("content-type", "text/plain; charset=utf-8")],
+                "Unauthorized".to_string(),
+            );
+        }
+    }
+
+    let active_sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner()).len();
     let uptime_secs = state.start_time.elapsed().as_secs();
     let body = state.metrics.render(active_sessions, uptime_secs);
     (
@@ -587,6 +665,11 @@ pub async fn run_server(listen: &str, config: Config, tls_cert: Option<&str>, tl
     let session_log_path = config.session_log_path.clone();
     let context_path = config.context_path.clone();
 
+    let witness_cache = Arc::new(std::sync::atomic::AtomicU8::new(WITNESS_UNCONFIGURED));
+    if config.audit_path.is_some() {
+        spawn_witness_poller(Arc::clone(&witness_cache));
+    }
+
     let state = ServeState {
         config: Arc::new(config),
         rate_limiter: Arc::new(Mutex::new(HashMap::new())),
@@ -594,6 +677,7 @@ pub async fn run_server(listen: &str, config: Config, tls_cert: Option<&str>, tl
         session_log_path: session_log_path.clone(),
         metrics: Arc::new(Metrics::default()),
         start_time: Arc::new(Instant::now()),
+        witness_status: witness_cache,
     };
 
     let app = Router::new()
@@ -696,17 +780,45 @@ fn monotonic_id() -> u64 {
     CTR.fetch_add(1, Ordering::Relaxed)
 }
 
+/// Generate a cryptographically random session ID using OS entropy.
+/// Falls back to monotonic counter + timestamp mix if /dev/urandom is unavailable.
+fn mint_session_id() -> String {
+    // Read 16 bytes from /dev/urandom — available on all Linux targets.
+    let mut buf = [0u8; 16];
+    let ok = std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| { use std::io::Read; f.read_exact(&mut buf) })
+        .is_ok();
+    if ok {
+        format!(
+            "sbh-{:08x}{:08x}{:08x}{:08x}",
+            u32::from_le_bytes(buf[0..4].try_into().unwrap()),
+            u32::from_le_bytes(buf[4..8].try_into().unwrap()),
+            u32::from_le_bytes(buf[8..12].try_into().unwrap()),
+            u32::from_le_bytes(buf[12..16].try_into().unwrap()),
+        )
+    } else {
+        format!("sbh-s-{}-{}", monotonic_id(), unix_now())
+    }
+}
+
+/// Percent-encode a string for use in HTTP header values.
+///
+/// Encodes each UTF-8 byte that is not an unreserved ASCII character.
+/// This is correct: we encode bytes, not Unicode codepoints, so multibyte
+/// chars like `é` (UTF-8: 0xC3 0xA9) become `%C3%A9`, not `%E9`.
 fn url_encode(s: &str) -> Result<String, ()> {
-    Ok(s.chars()
-        .map(|c| match c {
-            ' ' => "%20".to_string(),
-            '"' => "%22".to_string(),
-            '\n' => "%0A".to_string(),
-            '\r' => "%0D".to_string(),
-            c if (c as u32) > 127 => format!("%{:02X}", c as u32),
-            c => c.to_string(),
-        })
-        .collect())
+    let mut out = String::with_capacity(s.len());
+    for byte in s.as_bytes() {
+        match byte {
+            // Unreserved ASCII — pass through as-is
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9'
+            | b'-' | b'_' | b'.' | b'~' | b':' | b'/' | b',' | b'[' | b']'
+            | b'{' | b'}' => out.push(*byte as char),
+            // Everything else (including %, space, quotes, newlines, high bytes)
+            b => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    Ok(out)
 }
 
 // ---------------------------------------------------------------------------
