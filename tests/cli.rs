@@ -202,11 +202,11 @@ fn demo_offline_flag_shows_all_five_cases() {
     assert!(output.status.success(), "exit code: {}", output.status);
     let stderr = String::from_utf8_lossy(&output.stderr);
     // All 5 demo cases should appear
-    assert!(stderr.contains("benign technical query"),       "missing benign case");
-    assert!(stderr.contains("prompt injection attempt"),     "missing injection case");
-    assert!(stderr.contains("social engineering"),           "missing social-eng case");
-    assert!(stderr.contains("subtle flattery manipulation"), "missing flattery case");
-    assert!(stderr.contains("legitimate creative roleplay"), "missing roleplay case");
+    assert!(stderr.contains("benign operational query"),          "missing benign case");
+    assert!(stderr.contains("direct prompt injection"),           "missing injection case");
+    assert!(stderr.contains("insider threat"),                    "missing insider-threat case");
+    assert!(stderr.contains("foreign adversary"),                 "missing adversary case");
+    assert!(stderr.contains("BEC via AI proxy"),                  "missing BEC case");
     // Summary table should appear
     assert!(stderr.contains("Demo Summary"), "missing summary");
     assert!(stderr.contains("5 analyzed"),  "missing totals");
