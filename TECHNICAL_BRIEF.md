@@ -121,13 +121,28 @@ Evaluated against two public labeled adversarial datasets (local Ollama, llama3.
 | TrustAI Jailbreaks | 1,405 | — | — | — | Unlabeled; flagging rate analysis in progress |
 
 **Precision story:** SBH almost never flags benign content. On CyberEC, precision is
-perfect — every alert was a real injection. The recall gap is specific and well-bounded:
-direct-text injections are caught; encoding/obfuscation evasion is not.
+perfect — every alert was a real injection. The recall gap is specific and well-bounded.
 
-**Known blind spots:**
-- Context-embedded injections (payload buried inside a document the user submits)
-- Obfuscation evasion: unicode homoglyphs, leetspeak, base64, backslash-escaped text
-- Mitigation path: pre-processing stage to normalize encoding before Stage 1 (planned)
+**Stage 0 normalizer (added post-baseline):** A deobfuscation pass now runs before
+Stage 1. Tested against the 26 CyberEC false negatives:
+
+| Category | Count | Caught by normalizer |
+|---|---|---|
+| Unicode homoglyphs (Cyrillic/Greek) | 4 | ✓ all |
+| Base64-encoded payloads | 1 | ✓ |
+| Backslash-escaped text | 3 | ✓ all |
+| Fullwidth Unicode characters | 1 | ✓ |
+| Leetspeak in mixed-alpha tokens | 3 | ✓ all |
+| **Normalizer total** | **12/26** | **46% of prior FNs flipped** |
+| Morse code encoding | 1 | ✗ (planned) |
+| Semantic jailbreaks / direct instructions | 8 | ✗ (LLM Stage 1 handles) |
+| Indirect injection (logic framing, split strings) | 3 | ✗ (LLM Stage 1 handles) |
+| Likely mislabeled (benign questions in dataset) | 2 | n/a |
+
+**Remaining blind spots:**
+- Context-embedded injections (payload buried inside a document body)
+- Purely semantic attacks with no encoding (DAN jailbreaks, split-string, acronym substitution)
+- Morse code (one occurrence in dataset; decoder planned)
 
 ---
 
