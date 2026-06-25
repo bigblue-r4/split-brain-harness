@@ -1451,6 +1451,7 @@ dependencies = [
  "async-trait",
  "axum",
  "axum-server",
+ "base64",
  "crossterm",
  "ratatui",
  "reqwest",

@@ -171,6 +171,17 @@ pub struct VerificationReport {
     pub stop_and_ask: bool,
 }
 
+/// Summary of pre-Stage-1 obfuscation detections from the normalizer pass.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct ObfuscationReport {
+    /// 0.0 = clean input, 1.0 = heavily obfuscated. Threshold ~0.25 for action.
+    pub score: f32,
+    /// Human-readable list of detected obfuscation events, e.g. ["homoglyph (3)", "base64"].
+    pub detections: Vec<String>,
+    /// The normalized (deobfuscated) text that was passed to Stage 1.
+    pub normalized_input: String,
+}
+
 /// Full pipeline output: telemetry + verification + step-level trace.
 /// `capability_request` is `None` unless the model emitted one alongside
 /// its telemetry (Phase 1 schema — no execution in this release).
@@ -181,4 +192,7 @@ pub struct HarnessResult {
     pub trace: Vec<TraceEntry>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub capability_request: Option<crate::capability::CapabilityRequest>,
+    /// Present when the input required deobfuscation before Stage 1.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub obfuscation: Option<ObfuscationReport>,
 }

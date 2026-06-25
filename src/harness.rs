@@ -3,10 +3,11 @@ use crate::backends::InferenceEngine;
 use crate::capability::CapabilityRequest;
 use crate::context_packs::ContextPack;
 use crate::input_validation;
+use crate::normalizer;
 use crate::transformer::SplitBrainTransformer;
 use crate::types::{
-    AfferentTelemetry, CognitiveState, Config, HarnessResult, IntentMatrix, Soul, TelemetryResult,
-    TraceEntry, VerificationReport,
+    AfferentTelemetry, CognitiveState, Config, HarnessResult, IntentMatrix, ObfuscationReport,
+    Soul, TelemetryResult, TraceEntry, VerificationReport,
 };
 use crate::verifier;
 use anyhow::{anyhow, Result};
@@ -48,8 +49,33 @@ impl<'e> Harness<'e> {
 
         let mut trace: Vec<TraceEntry> = vec![];
 
+        // Stage 0: normalizer — deobfuscate before handing to the LLM
+        let norm = normalizer::run(input);
+        let obfuscation_report = if norm.detections.is_empty() {
+            None
+        } else {
+            let det_strings: Vec<String> = norm.detections.iter().map(|d| {
+                format!("{} ({:?} → {:?})", d.kind, &d.original[..d.original.len().min(40)], &d.normalized[..d.normalized.len().min(40)])
+            }).collect();
+            trace.push(TraceEntry {
+                stage: "normalizer".into(),
+                claim: normalizer::summary(&norm),
+                evidence: Some(det_strings.join("; ")),
+                passed: false,
+                note: Some(format!("normalized input passed to Stage 1: {:?}", &norm.normalized[..norm.normalized.len().min(80)])),
+            });
+            Some(ObfuscationReport {
+                score: norm.obfuscation_score,
+                detections: norm.detections.iter().map(|d| d.kind.to_string()).collect(),
+                normalized_input: norm.normalized.clone(),
+            })
+        };
+
+        // Use deobfuscated text for Stage 1 so the LLM sees the real intent
+        let effective_input = if norm.detections.is_empty() { input } else { &norm.normalized };
+
         let (telemetry, capability_request, propose_entries, is_fallback) =
-            self.run_propose(input).await?;
+            self.run_propose(effective_input).await?;
         trace.extend(propose_entries);
 
         if is_fallback {
@@ -69,11 +95,12 @@ impl<'e> Harness<'e> {
                 verification,
                 trace,
                 capability_request: None,
+                obfuscation: obfuscation_report,
             });
         }
 
-        let (verification, verify_traces) = verifier::verify(
-            input,
+        let (mut verification, verify_traces) = verifier::verify(
+            effective_input,
             &telemetry,
             &self.transformer.soul,
             self.engine,
@@ -82,11 +109,31 @@ impl<'e> Harness<'e> {
         .await;
         trace.extend(verify_traces);
 
+        // If obfuscation was detected, force verification to fail and surface it
+        if let Some(ref obs) = obfuscation_report {
+            if obs.score >= 0.25 {
+                verification.passed = false;
+                verification.consistency_flags.insert(
+                    0,
+                    format!(
+                        "obfuscation detected (score {:.2}): {} — input was deobfuscated before analysis",
+                        obs.score,
+                        obs.detections.join(", ")
+                    ),
+                );
+                if obs.score >= 0.60 {
+                    verification.stop_and_ask = true;
+                    verification.confidence = (verification.confidence * 0.5).min(0.3);
+                }
+            }
+        }
+
         Ok(HarnessResult {
             telemetry,
             verification,
             trace,
             capability_request,
+            obfuscation: obfuscation_report,
         })
     }
 

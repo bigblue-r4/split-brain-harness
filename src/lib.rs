@@ -10,6 +10,7 @@ pub mod extractor;
 pub mod generative_forge;
 pub mod harness;
 pub mod input_validation;
+pub mod normalizer;
 pub mod policy;
 pub mod rag;
 pub mod regenerative_forge;
