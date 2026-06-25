@@ -10,6 +10,10 @@ CyberEC precision is perfect — zero false positives. Stage 0 normalizer catche
 
 **354 tests · CI green · [MIT license](LICENSE)**
 
+Stage 0 normalizer components are available as standalone crates:
+**[deobfuscate](https://crates.io/crates/deobfuscate)** — 7-pass encoding-evasion normalizer ·
+**[unicode-interference](https://crates.io/crates/unicode-interference)** — forward/reverse script-mixing detector
+
 ---
 
 ## Quick demo (no backend required)
