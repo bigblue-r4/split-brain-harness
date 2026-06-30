@@ -1155,6 +1155,7 @@ mod tests {
                 assumptions: vec![],
                 unresolved: vec![],
                 confidence: 0.9,
+                disagreement: Default::default(),
                 stop_and_ask: false,
             },
             trace: vec![],

@@ -108,6 +108,7 @@ impl<'e> Harness<'e> {
                     "model returned non-JSON — parse failure (see trace for raw output)".into(),
                 ],
                 confidence: 0.0,
+                disagreement: Default::default(),
                 stop_and_ask: true,
             };
             return Ok(HarnessResult {

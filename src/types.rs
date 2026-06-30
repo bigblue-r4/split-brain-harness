@@ -29,6 +29,12 @@ pub enum VerifyMode {
     /// Deterministic checks + a second LLM call against the verifier soul prompt.
     #[serde(rename = "llm")]
     Llm,
+    /// Deterministic checks + LLM verifier + a third adjudicator LLM call when the
+    /// disagreement structure matches a high-risk injection fingerprint.
+    /// Inspired by ReConcile (ACL) multi-model consensus and DiscoUQ structured
+    /// disagreement scoring.
+    #[serde(rename = "reconcile")]
+    Reconcile,
     /// Skip verification entirely.
     #[serde(rename = "none")]
     None,
@@ -90,6 +96,7 @@ impl std::fmt::Display for VerifyMode {
         match self {
             VerifyMode::Deterministic => write!(f, "deterministic"),
             VerifyMode::Llm => write!(f, "llm"),
+            VerifyMode::Reconcile => write!(f, "reconcile"),
             VerifyMode::None => write!(f, "none"),
         }
     }
@@ -157,6 +164,36 @@ pub struct TraceEntry {
     pub note: Option<String>,
 }
 
+/// Structured analysis of how the verification layer disagrees with the proposer.
+///
+/// Inspired by DiscoUQ (structured inter-agent disagreement scoring): not all flag
+/// counts are equal. Two flags from the same analytical domain suggest a single
+/// root cause; flags spread across domains suggest a broader attack surface. The
+/// injection fingerprint fires when the flag combination matches the canonical
+/// manipulation-evasion pattern (adversarial tone + urgency both present while
+/// manipulation_risk is asserted low).
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct DisagreementScore {
+    /// Number of deterministic consistency checks that fired.
+    pub flag_count: usize,
+    /// Fraction of total checks that fired (0.0–1.0).
+    pub flag_density: f32,
+    /// Number of distinct analytical dimensions with at least one flag.
+    /// Dimensions: affective, tone, urgency, coherence, risk-value, risk-signal.
+    pub dimension_spread: usize,
+    /// True when the flag set matches the canonical injection-evasion fingerprint:
+    /// adversarial/coercive tone + high urgency both flagging against a low
+    /// manipulation_risk assertion. This pattern indicates the proposer was deceived
+    /// by a payload designed to appear benign while exerting coercive pressure.
+    pub injection_fingerprint: bool,
+    /// Confidence derived from disagreement structure (replaces flat flag-count penalty).
+    /// Uses density and fingerprint match instead of a simple per-flag discount.
+    pub adjusted_confidence: f32,
+    /// Present when Reconcile mode ran — summary of the adjudicator's verdict.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reconcile_verdict: Option<String>,
+}
+
 /// Result of the verification stage.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct VerificationReport {
@@ -166,6 +203,8 @@ pub struct VerificationReport {
     pub assumptions: Vec<String>,
     pub unresolved: Vec<String>,
     pub confidence: f32,
+    /// Structured disagreement analysis (DiscoUQ-inspired). Always populated.
+    pub disagreement: DisagreementScore,
     /// When true, confidence is below threshold — caller should pause and ask
     /// for clarification rather than acting on the result.
     pub stop_and_ask: bool,
