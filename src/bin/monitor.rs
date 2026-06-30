@@ -440,7 +440,9 @@ fn render_title(frame: &mut Frame, area: Rect) {
         Paragraph::new(Line::from(vec![
             Span::styled(
                 " SGAIL Labs",
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 " ◆ Split-Brain Monitor",
@@ -495,7 +497,9 @@ fn render_chat(frame: &mut Frame, app: &App, area: Rect) {
             lines.push(Line::from(vec![
                 Span::styled(
                     "  sbh  ",
-                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw(first.to_string()),
                 Span::styled("▌", Style::default().fg(Color::DarkGray)),
@@ -510,7 +514,9 @@ fn render_chat(frame: &mut Frame, app: &App, area: Rect) {
             lines.push(Line::from(vec![
                 Span::styled(
                     "  sbh  ",
-                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled("▌", Style::default().fg(Color::DarkGray)),
             ]));
@@ -567,8 +573,8 @@ fn render_telemetry(frame: &mut Frame, app: &App, area: Rect) {
     let spark_h: u16 = if show_sparkline { 2 } else { 0 };
 
     let sections = Layout::vertical([
-        Constraint::Length(2), // risk gauge
-        Constraint::Min(0),    // telemetry fields
+        Constraint::Length(2),       // risk gauge
+        Constraint::Min(0),          // telemetry fields
         Constraint::Length(spark_h), // escalation sparkline (hidden when 0)
     ])
     .split(inner);
@@ -618,16 +624,34 @@ fn render_telemetry(frame: &mut Frame, app: &App, area: Rect) {
 
             let mut lines: Vec<Line> = vec![
                 Line::from(""),
-                kv("  emotion  ", &r.telemetry.affective_telemetry.primary_emotion, Color::White),
-                kv2(
-                    "  intensity", &f2(&r.telemetry.affective_telemetry.emotional_intensity),
-                    "  urgency  ", &f2(&r.telemetry.cognitive_state.urgency_vector),
+                kv(
+                    "  emotion  ",
+                    &r.telemetry.affective_telemetry.primary_emotion,
+                    Color::White,
                 ),
-                kv("  coherence", &f2(&r.telemetry.cognitive_state.coherence_rating), Color::White),
+                kv2(
+                    "  intensity",
+                    &f2(&r.telemetry.affective_telemetry.emotional_intensity),
+                    "  urgency  ",
+                    &f2(&r.telemetry.cognitive_state.urgency_vector),
+                ),
+                kv(
+                    "  coherence",
+                    &f2(&r.telemetry.cognitive_state.coherence_rating),
+                    Color::White,
+                ),
                 kv("  tone     ", &tone, Color::White),
                 Line::from(""),
-                kv("  objective", &r.telemetry.intent_matrix.stated_objective, Color::White),
-                kv("  subtext  ", &r.telemetry.intent_matrix.subtextual_motive, Color::White),
+                kv(
+                    "  objective",
+                    &r.telemetry.intent_matrix.stated_objective,
+                    Color::White,
+                ),
+                kv(
+                    "  subtext  ",
+                    &r.telemetry.intent_matrix.subtextual_motive,
+                    Color::White,
+                ),
                 Line::from(""),
             ];
 
@@ -665,7 +689,10 @@ fn render_telemetry(frame: &mut Frame, app: &App, area: Rect) {
                 .collect();
             if !active_packs.is_empty() {
                 lines.push(Line::from(""));
-                lines.push(Line::from(Span::styled("  packs", Style::default().fg(Color::DarkGray))));
+                lines.push(Line::from(Span::styled(
+                    "  packs",
+                    Style::default().fg(Color::DarkGray),
+                )));
                 for p in &active_packs {
                     lines.push(Line::from(vec![
                         Span::styled("  ⚡ ", Style::default().fg(Color::Yellow)),
@@ -703,10 +730,10 @@ fn render_telemetry(frame: &mut Frame, app: &App, area: Rect) {
         };
         frame.render_widget(
             Sparkline::default()
-                .block(
-                    Block::default()
-                        .title(Span::styled(" escalation trend ", Style::default().fg(Color::DarkGray))),
-                )
+                .block(Block::default().title(Span::styled(
+                    " escalation trend ",
+                    Style::default().fg(Color::DarkGray),
+                )))
                 .data(&app.risk_history)
                 .style(Style::default().fg(spark_color)),
             sections[2],
@@ -731,13 +758,27 @@ fn render_status(frame: &mut Frame, app: &App, area: Rect) {
     };
     frame.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled(" sbh", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                " sbh",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::styled("  analysis:", Style::default().fg(Color::DarkGray)),
-            Span::styled(format!(" {} ", app.analysis_model), Style::default().fg(Color::White)),
+            Span::styled(
+                format!(" {} ", app.analysis_model),
+                Style::default().fg(Color::White),
+            ),
             Span::styled(" chat:", Style::default().fg(Color::DarkGray)),
-            Span::styled(format!(" {} ", app.chat_model), Style::default().fg(Color::White)),
+            Span::styled(
+                format!(" {} ", app.chat_model),
+                Style::default().fg(Color::White),
+            ),
             Span::styled(" verify:", Style::default().fg(Color::DarkGray)),
-            Span::styled(format!(" {} ", app.verify_mode), Style::default().fg(Color::White)),
+            Span::styled(
+                format!(" {} ", app.verify_mode),
+                Style::default().fg(Color::White),
+            ),
             Span::styled(format!(" [{phase}]"), Style::default().fg(Color::DarkGray)),
             Span::styled(scroll_indicator, Style::default().fg(Color::Yellow)),
         ])),
@@ -762,7 +803,14 @@ fn render_input(frame: &mut Frame, app: &App, area: Rect) {
             let ch = after.chars().next().unwrap_or(' ');
             format!("\x1b[7m{ch}\x1b[27m") // reverse video — terminal renders it
         };
-        format!(" > {before}{cursor_char}{}", &after[after.char_indices().nth(1).map(|(i, _)| i).unwrap_or(after.len())..])
+        format!(
+            " > {before}{cursor_char}{}",
+            &after[after
+                .char_indices()
+                .nth(1)
+                .map(|(i, _)| i)
+                .unwrap_or(after.len())..]
+        )
     } else {
         format!(" > {}", app.input)
     };

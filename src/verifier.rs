@@ -194,12 +194,20 @@ fn check_consistency(t: &TelemetryResult) -> (Vec<String>, Vec<TraceEntry>) {
                 // inconsistent: it suggests the proposer confused emotional subject-matter
                 // intensity with actual coercive intent directed at the system.
                 let coercive_tones = [
-                    "adversarial", "coercive", "threatening", "manipulative",
-                    "demanding", "directive", "authority-invoking", "hostile",
+                    "adversarial",
+                    "coercive",
+                    "threatening",
+                    "manipulative",
+                    "demanding",
+                    "directive",
+                    "authority-invoking",
+                    "hostile",
                 ];
-                let has_coercive_tone = t.affective_telemetry.structural_tone.iter().any(|s| {
-                    coercive_tones.contains(&s.to_lowercase().as_str())
-                });
+                let has_coercive_tone = t
+                    .affective_telemetry
+                    .structural_tone
+                    .iter()
+                    .any(|s| coercive_tones.contains(&s.to_lowercase().as_str()));
                 if t.intent_matrix.manipulation_risk == "high"
                     && t.cognitive_state.urgency_vector < 0.4
                     && !has_coercive_tone
@@ -513,7 +521,9 @@ mod tests {
             let t = make_telemetry("neutral", 0.1, vec!["cooperative"], risk, 0.1, 0.9);
             let (flags, _) = check_consistency(&t);
             assert!(
-                !flags.iter().any(|f| f.contains("is not a recognized value")),
+                !flags
+                    .iter()
+                    .any(|f| f.contains("is not a recognized value")),
                 "valid risk '{}' should not fire the unknown-value check",
                 risk
             );
@@ -522,7 +532,9 @@ mod tests {
         let t_high = make_telemetry("commanding", 0.8, vec!["coercive"], "high", 0.8, 0.8);
         let (flags, _) = check_consistency(&t_high);
         assert!(
-            !flags.iter().any(|f| f.contains("is not a recognized value")),
+            !flags
+                .iter()
+                .any(|f| f.contains("is not a recognized value")),
             "valid risk 'high' should not fire the unknown-value check"
         );
     }
@@ -575,7 +587,14 @@ mod tests {
         // The MT-Bench tree/deforestation false positive: creative roleplay scored
         // manipulation_risk=high but with sorrow emotion, urgency=0.20, no coercive tones.
         // The new check should catch this as internally inconsistent.
-        let t = make_telemetry("sorrow", 0.6, vec!["analytical", "persuasive"], "high", 0.2, 0.8);
+        let t = make_telemetry(
+            "sorrow",
+            0.6,
+            vec!["analytical", "persuasive"],
+            "high",
+            0.2,
+            0.8,
+        );
         let (flags, _) = check_consistency(&t);
         assert!(
             flags.iter().any(|f| f.contains("coercive signals")),
@@ -597,7 +616,14 @@ mod tests {
     #[test]
     fn high_risk_coercive_tone_low_urgency_not_flagged_by_new_check() {
         // Coercive tone alone is enough to make high risk coherent.
-        let t = make_telemetry("commanding", 0.7, vec!["coercive", "directive"], "high", 0.2, 0.7);
+        let t = make_telemetry(
+            "commanding",
+            0.7,
+            vec!["coercive", "directive"],
+            "high",
+            0.2,
+            0.7,
+        );
         let (flags, _) = check_consistency(&t);
         assert!(
             !flags.iter().any(|f| f.contains("coercive signals")),

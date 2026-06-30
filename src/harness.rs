@@ -34,7 +34,11 @@ impl<'e> Harness<'e> {
         engine: &'e dyn InferenceEngine,
         config: &'e Config,
     ) -> Self {
-        Self { transformer, engine, config }
+        Self {
+            transformer,
+            engine,
+            config,
+        }
     }
 
     /// Two-stage pipeline:
@@ -54,15 +58,27 @@ impl<'e> Harness<'e> {
         let obfuscation_report = if norm.detections.is_empty() {
             None
         } else {
-            let det_strings: Vec<String> = norm.detections.iter().map(|d| {
-                format!("{} ({:?} → {:?})", d.kind, &d.original[..d.original.len().min(40)], &d.normalized[..d.normalized.len().min(40)])
-            }).collect();
+            let det_strings: Vec<String> = norm
+                .detections
+                .iter()
+                .map(|d| {
+                    format!(
+                        "{} ({:?} → {:?})",
+                        d.kind,
+                        &d.original[..d.original.len().min(40)],
+                        &d.normalized[..d.normalized.len().min(40)]
+                    )
+                })
+                .collect();
             trace.push(TraceEntry {
                 stage: "normalizer".into(),
                 claim: normalizer::summary(&norm),
                 evidence: Some(det_strings.join("; ")),
                 passed: false,
-                note: Some(format!("normalized input passed to Stage 1: {:?}", &norm.normalized[..norm.normalized.len().min(80)])),
+                note: Some(format!(
+                    "normalized input passed to Stage 1: {:?}",
+                    &norm.normalized[..norm.normalized.len().min(80)]
+                )),
             });
             Some(ObfuscationReport {
                 score: norm.obfuscation_score,
@@ -72,7 +88,11 @@ impl<'e> Harness<'e> {
         };
 
         // Use deobfuscated text for Stage 1 so the LLM sees the real intent
-        let effective_input = if norm.detections.is_empty() { input } else { &norm.normalized };
+        let effective_input = if norm.detections.is_empty() {
+            input
+        } else {
+            &norm.normalized
+        };
 
         let (telemetry, capability_request, propose_entries, is_fallback) =
             self.run_propose(effective_input).await?;
@@ -343,7 +363,8 @@ fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
         s.to_string()
     } else {
-        let boundary = s.char_indices()
+        let boundary = s
+            .char_indices()
             .map(|(i, _)| i)
             .take_while(|&i| i <= max)
             .last()

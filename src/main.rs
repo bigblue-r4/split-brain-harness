@@ -26,7 +26,13 @@ async fn main() -> Result<()> {
         Command::Doctor | Command::Audit { .. } | Command::ExportOllama { .. }
     );
     // --dump-prompt exits before any model call, so skip validation there too.
-    let is_dump = matches!(cmd, Command::Analyze { dump_prompt: true, .. });
+    let is_dump = matches!(
+        cmd,
+        Command::Analyze {
+            dump_prompt: true,
+            ..
+        }
+    );
     if needs_backend && !is_dump {
         if let Err(errs) = validate_config(&config) {
             for e in &errs {
@@ -51,8 +57,18 @@ async fn main() -> Result<()> {
             cmd_analyze(&input, &config, raw, trace).await
         }
         Command::Doctor => cmd_doctor(&config).await,
-        Command::Demo { raw, offline, pause, serve_mode, export } => cmd_demo(&config, raw, offline, pause, serve_mode, export.as_deref()).await,
-        Command::ExportOllama { base, output, no_context } => cmd_export_ollama(&config, &base, &output, no_context),
+        Command::Demo {
+            raw,
+            offline,
+            pause,
+            serve_mode,
+            export,
+        } => cmd_demo(&config, raw, offline, pause, serve_mode, export.as_deref()).await,
+        Command::ExportOllama {
+            base,
+            output,
+            no_context,
+        } => cmd_export_ollama(&config, &base, &output, no_context),
         Command::DebugBundle { input, output } => {
             config.dump_prompt = true;
             config.dump_raw = true;
@@ -63,15 +79,38 @@ async fn main() -> Result<()> {
             input,
             max_retries,
         } => cmd_forge(&capability, &input, max_retries, &config).await,
-        Command::Serve { listen, session_log, tls_cert, tls_key } => {
+        Command::Serve {
+            listen,
+            session_log,
+            tls_cert,
+            tls_key,
+        } => {
             if let Some(p) = session_log {
                 config.session_log_path = Some(p);
             }
-            split_brain_harness::serve::run_server(&listen, config, tls_cert.as_deref(), tls_key.as_deref()).await
+            split_brain_harness::serve::run_server(
+                &listen,
+                config,
+                tls_cert.as_deref(),
+                tls_key.as_deref(),
+            )
+            .await
         }
         Command::Audit { tail, since } => cmd_audit(&config, tail, since.as_deref()),
-        Command::Bench { input, baseline, output, fail_on_regression } => {
-            cmd_bench(&config, &input, baseline.as_deref(), output.as_deref(), fail_on_regression).await
+        Command::Bench {
+            input,
+            baseline,
+            output,
+            fail_on_regression,
+        } => {
+            cmd_bench(
+                &config,
+                &input,
+                baseline.as_deref(),
+                output.as_deref(),
+                fail_on_regression,
+            )
+            .await
         }
     }
 }
@@ -180,11 +219,17 @@ fn parse_command(args: &[String]) -> Result<Command> {
     match positional.first().copied() {
         Some("doctor") => return Ok(Command::Doctor),
         Some("demo") => {
-            let offline    = args.contains(&"--offline".to_string());
-            let pause      = args.contains(&"--pause".to_string());
+            let offline = args.contains(&"--offline".to_string());
+            let pause = args.contains(&"--pause".to_string());
             let serve_mode = args.contains(&"--serve".to_string());
-            let export     = flag_value(args, "--export");
-            return Ok(Command::Demo { raw, offline, pause, serve_mode, export });
+            let export = flag_value(args, "--export");
+            return Ok(Command::Demo {
+                raw,
+                offline,
+                pause,
+                serve_mode,
+                export,
+            });
         }
         Some("audit") => {
             let tail = flag_value(args, "--tail").and_then(|s| s.parse().ok());
@@ -192,30 +237,37 @@ fn parse_command(args: &[String]) -> Result<Command> {
             return Ok(Command::Audit { tail, since });
         }
         Some("bench") => {
-            let input = positional
-                .get(1)
-                .map(|s| s.to_string())
-                .ok_or_else(|| {
-                    anyhow!(
-                        "bench requires an input JSONL file\n\
+            let input = positional.get(1).map(|s| s.to_string()).ok_or_else(|| {
+                anyhow!(
+                    "bench requires an input JSONL file\n\
                          Usage: split-brain-harness bench <file.jsonl> [--baseline <prev.jsonl>] \
                          [--output <out.jsonl>] [--fail-on-regression]"
-                    )
-                })?;
+                )
+            })?;
             let baseline = flag_value(args, "--baseline");
             let output = flag_value(args, "--output");
             let fail_on_regression = args.contains(&"--fail-on-regression".to_string());
-            return Ok(Command::Bench { input, baseline, output, fail_on_regression });
+            return Ok(Command::Bench {
+                input,
+                baseline,
+                output,
+                fail_on_regression,
+            });
         }
         Some("serve") => {
             let listen =
                 flag_value(args, "--listen").unwrap_or_else(|| "127.0.0.1:8088".to_string());
             let session_log = flag_value(args, "--session-log");
-            let tls_cert = flag_value(args, "--tls-cert")
-                .or_else(|| std::env::var("SBH_TLS_CERT").ok());
-            let tls_key = flag_value(args, "--tls-key")
-                .or_else(|| std::env::var("SBH_TLS_KEY").ok());
-            return Ok(Command::Serve { listen, session_log, tls_cert, tls_key });
+            let tls_cert =
+                flag_value(args, "--tls-cert").or_else(|| std::env::var("SBH_TLS_CERT").ok());
+            let tls_key =
+                flag_value(args, "--tls-key").or_else(|| std::env::var("SBH_TLS_KEY").ok());
+            return Ok(Command::Serve {
+                listen,
+                session_log,
+                tls_cert,
+                tls_key,
+            });
         }
         Some("export-ollama") => {
             let base = flag_value(args, "--base")
@@ -223,7 +275,11 @@ fn parse_command(args: &[String]) -> Result<Command> {
             let output =
                 flag_value(args, "--output").unwrap_or_else(|| "Modelfile.split-brain".to_string());
             let no_context = args.contains(&"--no-context".to_string());
-            return Ok(Command::ExportOllama { base, output, no_context });
+            return Ok(Command::ExportOllama {
+                base,
+                output,
+                no_context,
+            });
         }
         Some("debug-bundle") => {
             let output = flag_value(args, "--output");
@@ -422,14 +478,18 @@ fn print_result_pretty(r: &HarnessResult) {
         _ => (GREEN, "LOW   ✓", "████░░░░░░░░░░░░░░░░░░░░░░░░░░"),
     };
     let conf = r.verification.confidence;
-    let conf_color = if conf > 0.7 { GREEN } else if conf > 0.4 { YELLOW } else { RED };
+    let conf_color = if conf > 0.7 {
+        GREEN
+    } else if conf > 0.4 {
+        YELLOW
+    } else {
+        RED
+    };
     let tone = r.telemetry.affective_telemetry.structural_tone.join(", ");
     let rule = "─".repeat(54);
 
     println!("{DIM}{rule}{R}");
-    println!(
-        "  {BOLD}RISK{R}       {risk_color}{BOLD}{risk_label}{R}  {risk_color}{risk_bar}{R}"
-    );
+    println!("  {BOLD}RISK{R}       {risk_color}{BOLD}{risk_label}{R}  {risk_color}{risk_bar}{R}");
     println!("{DIM}{rule}{R}");
     println!(
         "  {DIM}emotion{R}    {WHITE}{}{R}",
@@ -454,15 +514,17 @@ fn print_result_pretty(r: &HarnessResult) {
         r.telemetry.intent_matrix.subtextual_motive
     );
     println!("{DIM}{rule}{R}");
-    let supported = if r.verification.passed { "passed" } else { "flagged" };
+    let supported = if r.verification.passed {
+        "passed"
+    } else {
+        "flagged"
+    };
     let sas = if r.verification.stop_and_ask {
         format!("  {RED}{BOLD}⚠  stop_and_ask{R}")
     } else {
         String::new()
     };
-    println!(
-        "  {DIM}verification{R}  {supported}  {DIM}conf:{R} {conf_color}{conf:.2}{R}{sas}"
-    );
+    println!("  {DIM}verification{R}  {supported}  {DIM}conf:{R} {conf_color}{conf:.2}{R}{sas}");
     if r.verification.consistency_flags.is_empty() {
         println!("  {DIM}flags{R}         none");
     } else {
@@ -778,15 +840,15 @@ fn bench_extract_risk(line: &str) -> Option<String> {
 
 fn bench_risk_level(risk: &str) -> u8 {
     match risk {
-        "low"    => 0,
+        "low" => 0,
         "medium" => 1,
-        _        => 2,
+        _ => 2,
     }
 }
 
 fn bench_status(new_risk: &str, old_risk: Option<&str>) -> &'static str {
     match old_risk {
-        None      => "new",
+        None => "new",
         Some(old) if old == new_risk => "same",
         Some(old) => {
             if bench_risk_level(new_risk) > bench_risk_level(old) {
@@ -809,11 +871,11 @@ async fn cmd_bench(
     use std::io::Write;
 
     let no_color = std::env::var("NO_COLOR").is_ok();
-    let red    = if no_color { "" } else { "\x1b[31m" };
-    let green  = if no_color { "" } else { "\x1b[32m" };
+    let red = if no_color { "" } else { "\x1b[31m" };
+    let green = if no_color { "" } else { "\x1b[32m" };
     let yellow = if no_color { "" } else { "\x1b[33m" };
-    let reset  = if no_color { "" } else { "\x1b[0m" };
-    let dim    = if no_color { "" } else { "\x1b[2m" };
+    let reset = if no_color { "" } else { "\x1b[0m" };
+    let dim = if no_color { "" } else { "\x1b[2m" };
 
     // Load input lines
     let input_raw = std::fs::read_to_string(input_path)
@@ -822,8 +884,8 @@ async fn cmd_bench(
 
     // Load baseline risks (by index)
     let baseline_risks: Vec<Option<String>> = if let Some(bp) = baseline_path {
-        let raw = std::fs::read_to_string(bp)
-            .with_context(|| format!("cannot read baseline: {bp}"))?;
+        let raw =
+            std::fs::read_to_string(bp).with_context(|| format!("cannot read baseline: {bp}"))?;
         raw.lines()
             .filter(|l| !l.trim().is_empty())
             .map(bench_extract_risk)
@@ -833,13 +895,14 @@ async fn cmd_bench(
     };
 
     let total = input_lines.len();
-    eprintln!("sbh bench: {total} inputs  baseline: {}",
-        baseline_path.unwrap_or("none"));
+    eprintln!(
+        "sbh bench: {total} inputs  baseline: {}",
+        baseline_path.unwrap_or("none")
+    );
 
     // Output file writer
     let mut out_file: Option<std::fs::File> = if let Some(p) = output_path {
-        Some(std::fs::File::create(p)
-            .with_context(|| format!("cannot create output file: {p}"))?)
+        Some(std::fs::File::create(p).with_context(|| format!("cannot create output file: {p}"))?)
     } else {
         None
     };
@@ -856,8 +919,12 @@ async fn cmd_bench(
         let text = match bench_extract_text(line) {
             Some(t) => t,
             None => {
-                eprintln!("  [{:>3}/{}] {yellow}SKIP{reset}  line {} has no extractable text",
-                    i + 1, total, i + 1);
+                eprintln!(
+                    "  [{:>3}/{}] {yellow}SKIP{reset}  line {} has no extractable text",
+                    i + 1,
+                    total,
+                    i + 1
+                );
                 n_error += 1;
                 continue;
             }
@@ -873,22 +940,29 @@ async fn cmd_bench(
                 let flags = &result.verification.consistency_flags;
 
                 match risk.as_str() {
-                    "low"    => n_low  += 1,
-                    "medium" => n_med  += 1,
-                    _        => n_high += 1,
+                    "low" => n_low += 1,
+                    "medium" => n_med += 1,
+                    _ => n_high += 1,
                 }
 
                 let risk_col = match risk.as_str() {
-                    "high"   => red,
+                    "high" => red,
                     "medium" => yellow,
-                    _        => green,
+                    _ => green,
                 };
 
                 let (status_col, status_label) = match status {
-                    "regressed" => { n_regressed += 1; regressions.push(format!("[{}] {}", risk, &text[..80.min(text.len())])); (red,    "REGRESSED") }
-                    "fixed"     => { n_fixed += 1;                                                                               (green,  "fixed    ") }
-                    "same"      => {                                                                                              (dim,    "same     ") }
-                    _           => {                                                                                              ("",     "new      ") }
+                    "regressed" => {
+                        n_regressed += 1;
+                        regressions.push(format!("[{}] {}", risk, &text[..80.min(text.len())]));
+                        (red, "REGRESSED")
+                    }
+                    "fixed" => {
+                        n_fixed += 1;
+                        (green, "fixed    ")
+                    }
+                    "same" => (dim, "same     "),
+                    _ => ("", "new      "),
                 };
 
                 let baseline_note = if let Some(br) = baseline_risk {
@@ -924,7 +998,13 @@ async fn cmd_bench(
             Err(e) => {
                 let elapsed = t0.elapsed().as_secs_f32();
                 n_error += 1;
-                eprintln!("  [{:>3}/{}] {yellow}ERROR{reset}  {:.1}s  {}", i + 1, total, elapsed, e);
+                eprintln!(
+                    "  [{:>3}/{}] {yellow}ERROR{reset}  {:.1}s  {}",
+                    i + 1,
+                    total,
+                    elapsed,
+                    e
+                );
                 if let Some(ref mut f) = out_file {
                     let entry = serde_json::json!({
                         "index": i,
@@ -947,8 +1027,10 @@ async fn cmd_bench(
     eprintln!("  {}", "━".repeat(50));
     eprintln!("  Bench Summary");
     eprintln!("  {bar}");
-    eprintln!("  {} inputs  |  {} low  |  {} medium  |  {} high  |  {} errors",
-        total, n_low, n_med, n_high, n_error);
+    eprintln!(
+        "  {} inputs  |  {} low  |  {} medium  |  {} high  |  {} errors",
+        total, n_low, n_med, n_high, n_error
+    );
     if baseline_path.is_some() {
         eprintln!("  {green}fixed: {n_fixed}{reset}   {red}regressed: {n_regressed}{reset}");
     }
@@ -1173,9 +1255,9 @@ fn demo_color(risk: &str, no_color: bool) -> (&'static str, &'static str) {
         return ("", "");
     }
     match risk {
-        "high"   => ("\x1b[31m", "\x1b[0m"),   // red
-        "medium" => ("\x1b[33m", "\x1b[0m"),   // yellow
-        _        => ("\x1b[32m", "\x1b[0m"),   // green
+        "high" => ("\x1b[31m", "\x1b[0m"),   // red
+        "medium" => ("\x1b[33m", "\x1b[0m"), // yellow
+        _ => ("\x1b[32m", "\x1b[0m"),        // green
     }
 }
 
@@ -1195,9 +1277,17 @@ fn demo_print_result(
     let risk = &t.intent_matrix.manipulation_risk;
     let (col, rst) = demo_color(risk, no_color);
     let verdict = if v.passed {
-        if no_color { "✓ passed".into() } else { format!("\x1b[32m✓ passed\x1b[0m") }
+        if no_color {
+            "✓ passed".into()
+        } else {
+            format!("\x1b[32m✓ passed\x1b[0m")
+        }
     } else {
-        if no_color { "✗ flagged".into() } else { format!("\x1b[31m✗ flagged\x1b[0m") }
+        if no_color {
+            "✗ flagged".into()
+        } else {
+            format!("\x1b[31m✗ flagged\x1b[0m")
+        }
     };
 
     eprintln!();
@@ -1205,10 +1295,19 @@ fn demo_print_result(
     eprintln!("        {}", case.category);
     eprintln!("        \"{}\"", case.input);
     eprintln!();
-    eprintln!("        emotion:       {} (intensity {:.2})", t.affective_telemetry.primary_emotion, t.affective_telemetry.emotional_intensity);
+    eprintln!(
+        "        emotion:       {} (intensity {:.2})",
+        t.affective_telemetry.primary_emotion, t.affective_telemetry.emotional_intensity
+    );
     eprintln!("        manipulation:  {col}{risk}{rst}");
-    eprintln!("        urgency:       {:.2}   coherence: {:.2}", t.cognitive_state.urgency_vector, t.cognitive_state.coherence_rating);
-    eprintln!("        verification:  {verdict}  (confidence {:.2})", v.confidence);
+    eprintln!(
+        "        urgency:       {:.2}   coherence: {:.2}",
+        t.cognitive_state.urgency_vector, t.cognitive_state.coherence_rating
+    );
+    eprintln!(
+        "        verification:  {verdict}  (confidence {:.2})",
+        v.confidence
+    );
     for flag in &v.consistency_flags {
         eprintln!("          ⚑ {flag}");
     }
@@ -1232,21 +1331,40 @@ fn demo_print_summary(cases: &[&DemoCase], results: &[HarnessResult], no_color: 
     for (i, (case, result)) in cases.iter().zip(results.iter()).enumerate() {
         let risk = &result.telemetry.intent_matrix.manipulation_risk;
         let (col, rst) = demo_color(risk, no_color);
-        let verdict = if result.verification.passed { "✓ passed" } else { "✗ flagged" };
-        let label = if case.label.len() > 34 { &case.label[..34] } else { case.label };
-        eprintln!("  {:<3}  {:<35}  {col}{:<8}{rst}  {verdict}", i + 1, label, risk);
+        let verdict = if result.verification.passed {
+            "✓ passed"
+        } else {
+            "✗ flagged"
+        };
+        let label = if case.label.len() > 34 {
+            &case.label[..34]
+        } else {
+            case.label
+        };
+        eprintln!(
+            "  {:<3}  {:<35}  {col}{:<8}{rst}  {verdict}",
+            i + 1,
+            label,
+            risk
+        );
         match risk.as_ref() {
-            "high"   => n_high   += 1,
-            "medium" => n_med    += 1,
-            _        => n_low    += 1,
+            "high" => n_high += 1,
+            "medium" => n_med += 1,
+            _ => n_low += 1,
         }
-        if !result.verification.passed { n_flagged += 1; }
+        if !result.verification.passed {
+            n_flagged += 1;
+        }
     }
 
     eprintln!("  {bar}");
     eprintln!(
         "  {} analyzed  |  {} low  |  {} medium  |  {} high  |  {} flagged",
-        cases.len(), n_low, n_med, n_high, n_flagged
+        cases.len(),
+        n_low,
+        n_med,
+        n_high,
+        n_flagged
     );
     eprintln!("  {}", "━".repeat(60));
 }
@@ -1265,7 +1383,7 @@ async fn cmd_demo(
     use split_brain_harness::types::BackendType;
 
     let no_color = std::env::var("NO_COLOR").is_ok() || raw;
-    let bold  = if no_color { "" } else { "\x1b[1m" };
+    let bold = if no_color { "" } else { "\x1b[1m" };
     let reset = if no_color { "" } else { "\x1b[0m" };
 
     // Banner
@@ -1279,7 +1397,7 @@ async fn cmd_demo(
             config.model_name
         );
         if offline {
-        eprintln!("  {bold}║  mode: offline (canned results — no backend required)   ║{reset}");
+            eprintln!("  {bold}║  mode: offline (canned results — no backend required)   ║{reset}");
         }
         eprintln!("  {bold}╚══════════════════════════════════════════════════════════╝{reset}");
     }
@@ -1298,7 +1416,9 @@ async fn cmd_demo(
             }
         }
         let case_refs: Vec<&DemoCase> = DEMO_CASES.iter().collect();
-        if !raw { demo_print_summary(&case_refs, &results, no_color); }
+        if !raw {
+            demo_print_summary(&case_refs, &results, no_color);
+        }
         if let Some(path) = export {
             demo_export_markdown(path, &case_refs, &results, config, true)?;
         }
@@ -1309,13 +1429,14 @@ async fn cmd_demo(
     if matches!(config.backend, BackendType::OllamaNative) {
         let client = reqwest::Client::new();
         let ping = client
-            .get(format!("{}/api/tags", config.endpoint.trim_end_matches('/')))
+            .get(format!(
+                "{}/api/tags",
+                config.endpoint.trim_end_matches('/')
+            ))
             .send()
             .await;
         if ping.is_err() || !ping.unwrap().status().is_success() {
-            eprintln!(
-                "\n  demo: backend not reachable at {}", config.endpoint
-            );
+            eprintln!("\n  demo: backend not reachable at {}", config.endpoint);
             eprintln!("  demo: run 'sbh doctor' to diagnose, or use --offline for a canned demo");
             eprintln!("  demo: would have run these inputs:");
             for case in DEMO_CASES {
@@ -1334,7 +1455,12 @@ async fn cmd_demo(
                 results.push(result);
             }
             Err(e) => {
-                eprintln!("\n  [{}/{}] {} — error: {e}", i + 1, DEMO_CASES.len(), case.label);
+                eprintln!(
+                    "\n  [{}/{}] {} — error: {e}",
+                    i + 1,
+                    DEMO_CASES.len(),
+                    case.label
+                );
             }
         }
         if pause && i + 1 < DEMO_CASES.len() {
@@ -1377,26 +1503,51 @@ fn demo_export_markdown(
         loop {
             let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
             let dy = if leap { 366 } else { 365 };
-            if days < dy { break; }
+            if days < dy {
+                break;
+            }
             days -= dy;
             year += 1;
         }
         let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
-        let month_days = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+        let month_days = [
+            31,
+            if leap { 29 } else { 28 },
+            31,
+            30,
+            31,
+            30,
+            31,
+            31,
+            30,
+            31,
+            30,
+            31,
+        ];
         let mut month = 0u32;
         for (m, &md) in month_days.iter().enumerate() {
-            if days < md { month = m as u32 + 1; break; }
+            if days < md {
+                month = m as u32 + 1;
+                break;
+            }
             days -= md;
         }
         format!("{year}-{month:02}-{:02}", days + 1)
     };
 
-    let mode = if offline { "offline (canned results)" } else { "live" };
+    let mode = if offline {
+        "offline (canned results)"
+    } else {
+        "live"
+    };
 
     let mut md = String::new();
     md.push_str("# Split-Brain Harness — Demo Results\n\n");
     md.push_str(&format!("Generated: {date}  \n"));
-    md.push_str(&format!("Backend: {} / {}  \n", config.backend, config.model_name));
+    md.push_str(&format!(
+        "Backend: {} / {}  \n",
+        config.backend, config.model_name
+    ));
     md.push_str(&format!("Mode: {mode}\n\n"));
 
     md.push_str("## Scenario Results\n\n");
@@ -1412,23 +1563,37 @@ fn demo_export_markdown(
         let risk = &result.telemetry.intent_matrix.manipulation_risk;
         let intensity = result.telemetry.affective_telemetry.emotional_intensity;
         let urgency = result.telemetry.cognitive_state.urgency_vector;
-        let verdict = if result.verification.passed { "✓ passed" } else { "✗ flagged" };
+        let verdict = if result.verification.passed {
+            "✓ passed"
+        } else {
+            "✗ flagged"
+        };
         match risk.as_str() {
-            "high"   => n_high += 1,
-            "medium" => n_med  += 1,
-            _        => n_low  += 1,
+            "high" => n_high += 1,
+            "medium" => n_med += 1,
+            _ => n_low += 1,
         }
-        if result.verification.passed { n_passed += 1; }
+        if result.verification.passed {
+            n_passed += 1;
+        }
         md.push_str(&format!(
             "| {} | {} | {} | **{}** | {:.2} | {:.2} | {} |\n",
-            i + 1, case.label, case.category, risk, intensity, urgency, verdict
+            i + 1,
+            case.label,
+            case.category,
+            risk,
+            intensity,
+            urgency,
+            verdict
         ));
     }
 
     let total = cases.len();
     md.push_str("\n## Summary\n\n");
     md.push_str(&format!("- **{total} scenarios analyzed**\n"));
-    md.push_str(&format!("- Risk distribution: {n_low} low / {n_med} medium / {n_high} high\n"));
+    md.push_str(&format!(
+        "- Risk distribution: {n_low} low / {n_med} medium / {n_high} high\n"
+    ));
     md.push_str(&format!("- Verification: {n_passed}/{total} passed\n"));
     md.push_str("\n---\n");
     md.push_str("\n> Generated by [split-brain-harness](https://github.com/bigblue-r4/split-brain-harness)\n");
@@ -1597,14 +1762,20 @@ fn demo_serve_offline_result(idx: usize) -> HarnessResult {
 }
 
 fn serve_risk_score(risk: &str) -> f32 {
-    match risk { "high" => 2.0, "medium" => 1.0, _ => 0.0 }
+    match risk {
+        "high" => 2.0,
+        "medium" => 1.0,
+        _ => 0.0,
+    }
 }
 
 fn serve_is_escalating(scores: &[f32]) -> bool {
-    if scores.len() < 3 { return false; }
+    if scores.len() < 3 {
+        return false;
+    }
     let latest = *scores.last().unwrap();
-    let historical: f32 = scores[..scores.len() - 1].iter().sum::<f32>()
-        / (scores.len() - 1) as f32;
+    let historical: f32 =
+        scores[..scores.len() - 1].iter().sum::<f32>() / (scores.len() - 1) as f32;
     latest >= 1.0 && latest > historical + 0.5
 }
 
@@ -1639,11 +1810,11 @@ async fn cmd_demo_serve(
     use split_brain_harness::types::BackendType;
 
     let no_color = std::env::var("NO_COLOR").is_ok() || raw;
-    let bold  = if no_color { "" } else { "\x1b[1m" };
+    let bold = if no_color { "" } else { "\x1b[1m" };
     let reset = if no_color { "" } else { "\x1b[0m" };
-    let red   = if no_color { "" } else { "\x1b[31m" };
-    let dim   = if no_color { "" } else { "\x1b[2m" };
-    let cyan  = if no_color { "" } else { "\x1b[36m" };
+    let red = if no_color { "" } else { "\x1b[31m" };
+    let dim = if no_color { "" } else { "\x1b[2m" };
+    let cyan = if no_color { "" } else { "\x1b[36m" };
 
     // Derive a stable demo session ID from the binary version
     let session_id = "sbh-demo-a3f7c2b1d9e4f8a2";
@@ -1673,11 +1844,17 @@ async fn cmd_demo_serve(
     if !offline && matches!(config.backend, BackendType::OllamaNative) {
         let client = reqwest::Client::new();
         let ping = client
-            .get(format!("{}/api/tags", config.endpoint.trim_end_matches('/')))
+            .get(format!(
+                "{}/api/tags",
+                config.endpoint.trim_end_matches('/')
+            ))
             .send()
             .await;
         if ping.is_err() || !ping.unwrap().status().is_success() {
-            eprintln!("\n  demo --serve: backend not reachable at {}", config.endpoint);
+            eprintln!(
+                "\n  demo --serve: backend not reachable at {}",
+                config.endpoint
+            );
             eprintln!("  Tip: use --offline for a canned demo that needs no backend");
             return Ok(());
         }
@@ -1721,8 +1898,8 @@ async fn cmd_demo_serve(
             eprintln!();
             if first_escalation {
                 eprintln!("  {red}{bold}{}{reset}", "═".repeat(60));
-                let hist: f32 = scores[..scores.len() - 1].iter().sum::<f32>()
-                    / (scores.len() - 1) as f32;
+                let hist: f32 =
+                    scores[..scores.len() - 1].iter().sum::<f32>() / (scores.len() - 1) as f32;
                 eprintln!("  {red}{bold}⚠  ESCALATION DETECTED — slow-boil alert fired on turn {turn}{reset}");
                 eprintln!(
                     "  {red}   risk score {score:.1} exceeds session mean {hist:.2} by {:.2}{reset}",
@@ -1732,7 +1909,11 @@ async fn cmd_demo_serve(
                 eprintln!("  {red}{bold}{}{reset}", "═".repeat(60));
             }
 
-            let flag = if escalation_turn.is_some() && escalating { format!(" {red}⚠{reset}") } else { String::new() };
+            let flag = if escalation_turn.is_some() && escalating {
+                format!(" {red}⚠{reset}")
+            } else {
+                String::new()
+            };
             eprintln!("  {bold}[turn {turn}/{total}] {}{reset}{flag}", case.label);
             eprintln!("  {dim}  category: {}{reset}", case.category);
             let input_preview = if case.input.len() > 90 {
@@ -1745,20 +1926,29 @@ async fn cmd_demo_serve(
             eprintln!("        risk:          {col}{bold}{risk}{rst}{reset}");
             eprintln!(
                 "        emotion:       {} (intensity {:.2})",
-                t.affective_telemetry.primary_emotion,
-                t.affective_telemetry.emotional_intensity
+                t.affective_telemetry.primary_emotion, t.affective_telemetry.emotional_intensity
             );
             eprintln!(
                 "        urgency:       {:.2}   coherence: {:.2}",
-                t.cognitive_state.urgency_vector,
-                t.cognitive_state.coherence_rating
+                t.cognitive_state.urgency_vector, t.cognitive_state.coherence_rating
             );
-            eprintln!("        subtext:       {}", t.intent_matrix.subtextual_motive);
+            eprintln!(
+                "        subtext:       {}",
+                t.intent_matrix.subtextual_motive
+            );
             eprintln!(
                 "        verification:  {}   (confidence {:.2}){}",
-                if v.passed { "✓ passed" } else { "✗ flagged" },
+                if v.passed {
+                    "✓ passed"
+                } else {
+                    "✗ flagged"
+                },
                 v.confidence,
-                if v.stop_and_ask { format!("  {red}stop_and_ask{reset}") } else { String::new() }
+                if v.stop_and_ask {
+                    format!("  {red}stop_and_ask{reset}")
+                } else {
+                    String::new()
+                }
             );
             for flag in &v.consistency_flags {
                 eprintln!("          ⚑ {flag}");
@@ -1791,9 +1981,10 @@ async fn cmd_demo_serve(
         eprintln!("  {dim}Total turns:{reset}     {}", results.len());
         match escalation_turn {
             Some(t) => eprintln!("  {dim}Escalation at:{reset}   {red}{bold}turn {t}{reset}"),
-            None    => eprintln!("  {dim}Escalation at:{reset}   none detected"),
+            None => eprintln!("  {dim}Escalation at:{reset}   none detected"),
         }
-        let trajectory = scores.iter()
+        let trajectory = scores
+            .iter()
             .map(|s| format!("{s:.1}"))
             .collect::<Vec<_>>()
             .join(" → ");
@@ -1812,7 +2003,15 @@ async fn cmd_demo_serve(
     }
 
     if let Some(path) = export {
-        demo_serve_export_markdown(path, &results, config, offline, session_id, escalation_turn, &scores)?;
+        demo_serve_export_markdown(
+            path,
+            &results,
+            config,
+            offline,
+            session_id,
+            escalation_turn,
+            &scores,
+        )?;
     }
 
     Ok(())
@@ -1834,14 +2033,25 @@ fn demo_serve_export_markdown(
         .unwrap_or_default()
         .as_secs();
     let days_since_epoch = secs / 86400;
-    let date = format!("2026-{:02}-{:02}", (days_since_epoch % 365 / 30) + 1, (days_since_epoch % 30) + 1);
+    let date = format!(
+        "2026-{:02}-{:02}",
+        (days_since_epoch % 365 / 30) + 1,
+        (days_since_epoch % 30) + 1
+    );
 
-    let mode = if offline { "offline (canned results)" } else { "live" };
+    let mode = if offline {
+        "offline (canned results)"
+    } else {
+        "live"
+    };
     let mut md = String::new();
 
     md.push_str("# Split-Brain Harness — Session Escalation Demo\n\n");
     md.push_str(&format!("Generated: {date}  \n"));
-    md.push_str(&format!("Backend: {} / {}  \nMode: {mode}\n\n", config.backend, config.model_name));
+    md.push_str(&format!(
+        "Backend: {} / {}  \nMode: {mode}\n\n",
+        config.backend, config.model_name
+    ));
     md.push_str("## Scenario\n\n");
     md.push_str("An adversary opens as a legitimate security reviewer and escalates ");
     md.push_str("to direct instruction override over 5 turns. ");
@@ -1857,14 +2067,22 @@ fn demo_serve_export_markdown(
         let risk = &result.telemetry.intent_matrix.manipulation_risk;
         let intensity = result.telemetry.affective_telemetry.emotional_intensity;
         let urgency = result.telemetry.cognitive_state.urgency_vector;
-        let alert = if escalation_turn == Some(turn) { "⚠ **ESCALATION**" } else { "" };
+        let alert = if escalation_turn == Some(turn) {
+            "⚠ **ESCALATION**"
+        } else {
+            ""
+        };
         md.push_str(&format!(
             "| {turn} | {} | **{risk}** | {intensity:.2} | {urgency:.2} | {alert} |\n",
             case.label
         ));
     }
 
-    let trajectory = scores.iter().map(|s| format!("{s:.1}")).collect::<Vec<_>>().join(" → ");
+    let trajectory = scores
+        .iter()
+        .map(|s| format!("{s:.1}"))
+        .collect::<Vec<_>>()
+        .join(" → ");
     md.push_str(&format!("\n**Risk trajectory:** {trajectory}\n\n"));
     match escalation_turn {
         Some(t) => md.push_str(&format!("**Escalation fired:** turn {t}\n\n")),
@@ -1880,7 +2098,9 @@ fn demo_serve_export_markdown(
     md.push_str("- Session log entry: masked IP + input fingerprint (no raw input stored)\n");
     md.push_str("- Works as a drop-in OpenAI-compatible proxy in front of any LLM\n\n");
     md.push_str("---\n\n");
-    md.push_str("> Generated by [split-brain-harness](https://github.com/bigblue-r4/split-brain-harness)\n");
+    md.push_str(
+        "> Generated by [split-brain-harness](https://github.com/bigblue-r4/split-brain-harness)\n",
+    );
 
     let mut f = std::fs::File::create(path)
         .with_context(|| format!("cannot create export file: {path}"))?;
@@ -2244,7 +2464,12 @@ mod tests {
     fn parse_demo_offline_flag() {
         let a = args(&["sbh", "demo", "--offline"]);
         match parse_command(&a).unwrap() {
-            Command::Demo { offline, raw, pause, .. } => {
+            Command::Demo {
+                offline,
+                raw,
+                pause,
+                ..
+            } => {
                 assert!(offline);
                 assert!(!raw);
                 assert!(!pause);
@@ -2285,7 +2510,11 @@ mod tests {
             "Modelfile",
         ]);
         match parse_command(&a).unwrap() {
-            Command::ExportOllama { base, output, no_context } => {
+            Command::ExportOllama {
+                base,
+                output,
+                no_context,
+            } => {
                 assert_eq!(base, "llama3.2:3b");
                 assert_eq!(output, "Modelfile");
                 assert!(!no_context);
@@ -2307,7 +2536,13 @@ mod tests {
 
     #[test]
     fn parse_export_ollama_no_context_flag() {
-        let a = args(&["sbh", "export-ollama", "--base", "llama3.2:3b", "--no-context"]);
+        let a = args(&[
+            "sbh",
+            "export-ollama",
+            "--base",
+            "llama3.2:3b",
+            "--no-context",
+        ]);
         match parse_command(&a).unwrap() {
             Command::ExportOllama { no_context, .. } => assert!(no_context),
             _ => panic!("expected ExportOllama"),
@@ -2384,7 +2619,12 @@ mod tests {
     fn parse_serve_default_listen() {
         let a = args(&["sbh", "serve"]);
         match parse_command(&a).unwrap() {
-            Command::Serve { listen, session_log, tls_cert, tls_key } => {
+            Command::Serve {
+                listen,
+                session_log,
+                tls_cert,
+                tls_key,
+            } => {
                 assert_eq!(listen, "127.0.0.1:8088");
                 assert!(session_log.is_none());
                 assert!(tls_cert.is_none());
@@ -2416,9 +2656,18 @@ mod tests {
 
     #[test]
     fn parse_serve_tls_flags() {
-        let a = args(&["sbh", "serve", "--tls-cert", "/etc/sbh/cert.pem", "--tls-key", "/etc/sbh/key.pem"]);
+        let a = args(&[
+            "sbh",
+            "serve",
+            "--tls-cert",
+            "/etc/sbh/cert.pem",
+            "--tls-key",
+            "/etc/sbh/key.pem",
+        ]);
         match parse_command(&a).unwrap() {
-            Command::Serve { tls_cert, tls_key, .. } => {
+            Command::Serve {
+                tls_cert, tls_key, ..
+            } => {
                 assert_eq!(tls_cert.as_deref(), Some("/etc/sbh/cert.pem"));
                 assert_eq!(tls_key.as_deref(), Some("/etc/sbh/key.pem"));
             }
@@ -2430,7 +2679,9 @@ mod tests {
     fn parse_demo_export_flag() {
         let a = args(&["sbh", "demo", "--offline", "--export", "demo.md"]);
         match parse_command(&a).unwrap() {
-            Command::Demo { offline, export, .. } => {
+            Command::Demo {
+                offline, export, ..
+            } => {
                 assert!(offline);
                 assert_eq!(export.as_deref(), Some("demo.md"));
             }
@@ -2442,7 +2693,12 @@ mod tests {
     fn parse_bench_input_only() {
         let a = args(&["sbh", "bench", "fixtures/mt_bench_questions.jsonl"]);
         match parse_command(&a).unwrap() {
-            Command::Bench { input, baseline, output, fail_on_regression } => {
+            Command::Bench {
+                input,
+                baseline,
+                output,
+                fail_on_regression,
+            } => {
                 assert_eq!(input, "fixtures/mt_bench_questions.jsonl");
                 assert!(baseline.is_none());
                 assert!(output.is_none());
@@ -2454,10 +2710,22 @@ mod tests {
 
     #[test]
     fn parse_bench_with_baseline_and_output() {
-        let a = args(&["sbh", "bench", "questions.jsonl",
-            "--baseline", "baseline.jsonl", "--output", "out.jsonl"]);
+        let a = args(&[
+            "sbh",
+            "bench",
+            "questions.jsonl",
+            "--baseline",
+            "baseline.jsonl",
+            "--output",
+            "out.jsonl",
+        ]);
         match parse_command(&a).unwrap() {
-            Command::Bench { input, baseline, output, .. } => {
+            Command::Bench {
+                input,
+                baseline,
+                output,
+                ..
+            } => {
                 assert_eq!(input, "questions.jsonl");
                 assert_eq!(baseline.as_deref(), Some("baseline.jsonl"));
                 assert_eq!(output.as_deref(), Some("out.jsonl"));
@@ -2470,7 +2738,9 @@ mod tests {
     fn parse_bench_fail_on_regression_flag() {
         let a = args(&["sbh", "bench", "q.jsonl", "--fail-on-regression"]);
         match parse_command(&a).unwrap() {
-            Command::Bench { fail_on_regression, .. } => assert!(fail_on_regression),
+            Command::Bench {
+                fail_on_regression, ..
+            } => assert!(fail_on_regression),
             _ => panic!("expected Bench"),
         }
     }
@@ -2507,23 +2777,23 @@ mod tests {
 
     #[test]
     fn bench_status_same() {
-        assert_eq!(bench_status("low",    Some("low")),    "same");
+        assert_eq!(bench_status("low", Some("low")), "same");
         assert_eq!(bench_status("medium", Some("medium")), "same");
-        assert_eq!(bench_status("high",   Some("high")),   "same");
+        assert_eq!(bench_status("high", Some("high")), "same");
     }
 
     #[test]
     fn bench_status_regressed() {
-        assert_eq!(bench_status("medium", Some("low")),    "regressed");
-        assert_eq!(bench_status("high",   Some("low")),    "regressed");
-        assert_eq!(bench_status("high",   Some("medium")), "regressed");
+        assert_eq!(bench_status("medium", Some("low")), "regressed");
+        assert_eq!(bench_status("high", Some("low")), "regressed");
+        assert_eq!(bench_status("high", Some("medium")), "regressed");
     }
 
     #[test]
     fn bench_status_fixed() {
-        assert_eq!(bench_status("low",    Some("medium")), "fixed");
-        assert_eq!(bench_status("low",    Some("high")),   "fixed");
-        assert_eq!(bench_status("medium", Some("high")),   "fixed");
+        assert_eq!(bench_status("low", Some("medium")), "fixed");
+        assert_eq!(bench_status("low", Some("high")), "fixed");
+        assert_eq!(bench_status("medium", Some("high")), "fixed");
     }
 
     #[test]

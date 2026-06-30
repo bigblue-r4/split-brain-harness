@@ -176,12 +176,20 @@ mod tests {
         let ip = IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4));
         let input = "same input every time";
         let e1 = SessionLogEntry::new(
-            "s1".into(), 3, vec!["low".into(), "low".into(), "high".into()],
-            0.0, &ip, input,
+            "s1".into(),
+            3,
+            vec!["low".into(), "low".into(), "high".into()],
+            0.0,
+            &ip,
+            input,
         );
         let e2 = SessionLogEntry::new(
-            "s2".into(), 4, vec!["low".into(), "low".into(), "low".into(), "high".into()],
-            0.0, &ip, input,
+            "s2".into(),
+            4,
+            vec!["low".into(), "low".into(), "low".into(), "high".into()],
+            0.0,
+            &ip,
+            input,
         );
         assert_eq!(e1.input_fingerprint, e2.input_fingerprint);
     }
@@ -190,9 +198,12 @@ mod tests {
     fn new_sets_current_risk_from_trajectory() {
         let ip = IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1));
         let entry = SessionLogEntry::new(
-            "s".into(), 3,
+            "s".into(),
+            3,
             vec!["low".into(), "medium".into(), "high".into()],
-            0.5, &ip, "x",
+            0.5,
+            &ip,
+            "x",
         );
         assert_eq!(entry.current_risk, "high");
     }

@@ -10,8 +10,11 @@ CyberEC precision is perfect — zero false positives. Stage 0 normalizer catche
 
 **354 tests · CI green · [MIT license](LICENSE)**
 
+[![CI](https://github.com/bigblue-r4/split-brain-harness/actions/workflows/ci.yml/badge.svg)](https://github.com/bigblue-r4/split-brain-harness/actions/workflows/ci.yml)
 [![crates.io](https://img.shields.io/crates/v/split-brain-harness.svg)](https://crates.io/crates/split-brain-harness)
 [![MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+See [CHANGELOG.md](CHANGELOG.md) for full version history.
 
 Stage 0 normalizer components are available as standalone crates:
 **[deobfuscate](https://crates.io/crates/deobfuscate)** — 7-pass encoding-evasion normalizer ·

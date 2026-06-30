@@ -37,8 +37,8 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use anyhow::Context as _;
 use crate::{analyze, session_log, types::Config};
+use anyhow::Context as _;
 
 // ---------------------------------------------------------------------------
 // Request / response types (OpenAI wire format subset)
@@ -153,7 +153,9 @@ impl ShardedRateLimiter {
                 .find(|(_, q)| q.back().map_or(true, |&t| now.duration_since(t) > window))
                 .map(|(k, _)| *k);
             match expired {
-                Some(evict) => { shard.remove(&evict); }
+                Some(evict) => {
+                    shard.remove(&evict);
+                }
                 None => return true,
             }
         }
@@ -323,14 +325,54 @@ impl Metrics {
     pub fn render(&self, active_sessions: usize, uptime_secs: u64) -> String {
         let mut out = String::with_capacity(512);
         let pairs: &[(&str, &str, &str, u64)] = &[
-            ("sbh_requests_total",       "counter", "Total POST /v1/chat/completions requests",        self.requests_total.load(Ordering::Relaxed)),
-            ("sbh_requests_ok_total",    "counter", "Requests that returned 200 OK",                   self.requests_ok_total.load(Ordering::Relaxed)),
-            ("sbh_requests_error_total", "counter", "Requests that returned 4xx or 5xx",               self.requests_error_total.load(Ordering::Relaxed)),
-            ("sbh_auth_failures_total",  "counter", "Requests rejected for missing/invalid auth key",  self.auth_failures_total.load(Ordering::Relaxed)),
-            ("sbh_rate_limit_total",     "counter", "Requests rejected by per-IP rate limiter",        self.rate_limit_total.load(Ordering::Relaxed)),
-            ("sbh_escalations_total",    "counter", "Slow-boil session escalation events detected",    self.escalations_total.load(Ordering::Relaxed)),
-            ("sbh_active_sessions",      "gauge",   "Sessions currently held in memory",               active_sessions as u64),
-            ("sbh_uptime_seconds",       "gauge",   "Seconds since sbh serve started",                 uptime_secs),
+            (
+                "sbh_requests_total",
+                "counter",
+                "Total POST /v1/chat/completions requests",
+                self.requests_total.load(Ordering::Relaxed),
+            ),
+            (
+                "sbh_requests_ok_total",
+                "counter",
+                "Requests that returned 200 OK",
+                self.requests_ok_total.load(Ordering::Relaxed),
+            ),
+            (
+                "sbh_requests_error_total",
+                "counter",
+                "Requests that returned 4xx or 5xx",
+                self.requests_error_total.load(Ordering::Relaxed),
+            ),
+            (
+                "sbh_auth_failures_total",
+                "counter",
+                "Requests rejected for missing/invalid auth key",
+                self.auth_failures_total.load(Ordering::Relaxed),
+            ),
+            (
+                "sbh_rate_limit_total",
+                "counter",
+                "Requests rejected by per-IP rate limiter",
+                self.rate_limit_total.load(Ordering::Relaxed),
+            ),
+            (
+                "sbh_escalations_total",
+                "counter",
+                "Slow-boil session escalation events detected",
+                self.escalations_total.load(Ordering::Relaxed),
+            ),
+            (
+                "sbh_active_sessions",
+                "gauge",
+                "Sessions currently held in memory",
+                active_sessions as u64,
+            ),
+            (
+                "sbh_uptime_seconds",
+                "gauge",
+                "Seconds since sbh serve started",
+                uptime_secs,
+            ),
         ];
         for (name, kind, help, value) in pairs {
             out.push_str(&format!("# HELP {name} {help}\n"));
@@ -486,7 +528,8 @@ async fn chat_completions(
         .filter(|s| {
             !s.is_empty()
                 && s.len() <= 64
-                && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                && s.chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
         })
         .map(|s| s.to_string())
         .unwrap_or_else(mint_session_id);
@@ -550,7 +593,9 @@ async fn chat_completions(
             )
                 .into_response();
         }
-        let hist = sessions.entry(session_id.clone()).or_insert_with(SessionHistory::new);
+        let hist = sessions
+            .entry(session_id.clone())
+            .or_insert_with(SessionHistory::new);
         hist.push(&result.telemetry.intent_matrix.manipulation_risk);
         let escalating = hist.is_escalating();
         let summary = if escalating {
@@ -623,7 +668,9 @@ async fn chat_completions(
     );
     // Witness status is refreshed every 30s by a background task — zero blocking here.
     let witness_status = witness_status_str(
-        state.witness_status.load(std::sync::atomic::Ordering::Relaxed),
+        state
+            .witness_status
+            .load(std::sync::atomic::Ordering::Relaxed),
     );
     if let Ok(val) = HeaderValue::from_str(witness_status) {
         resp_headers.insert("x-sbh-witness", val);
@@ -655,10 +702,7 @@ async fn chat_completions(
 // Metrics endpoint — Prometheus text exposition format
 // ---------------------------------------------------------------------------
 
-async fn metrics_handler(
-    State(state): State<ServeState>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
+async fn metrics_handler(State(state): State<ServeState>, headers: HeaderMap) -> impl IntoResponse {
     // /metrics is protected by the same bearer key as the main endpoint.
     // Without this, an unauthenticated observer can read request rates,
     // escalation counts, and active session count.
@@ -677,7 +721,11 @@ async fn metrics_handler(
         }
     }
 
-    let active_sessions = state.sessions.lock().unwrap_or_else(|e| e.into_inner()).len();
+    let active_sessions = state
+        .sessions
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .len();
     let uptime_secs = state.start_time.elapsed().as_secs();
     let body = state.metrics.render(active_sessions, uptime_secs);
     (
@@ -703,7 +751,12 @@ async fn health() -> impl IntoResponse {
 // Public entry point
 // ---------------------------------------------------------------------------
 
-pub async fn run_server(listen: &str, config: Config, tls_cert: Option<&str>, tls_key: Option<&str>) -> anyhow::Result<()> {
+pub async fn run_server(
+    listen: &str,
+    config: Config,
+    tls_cert: Option<&str>,
+    tls_key: Option<&str>,
+) -> anyhow::Result<()> {
     let rate_limit = config.serve_rate_limit;
     let max_body = config.serve_max_body_bytes;
     let auth_enabled = config.serve_key.is_some();
@@ -783,7 +836,8 @@ pub async fn run_server(listen: &str, config: Config, tls_cert: Option<&str>, tl
             let tls_config = RustlsConfig::from_pem_file(cert, key)
                 .await
                 .with_context(|| format!("TLS: failed to load cert={cert} key={key}"))?;
-            let addr: SocketAddr = listen.parse()
+            let addr: SocketAddr = listen
+                .parse()
                 .with_context(|| format!("invalid listen address: {listen}"))?;
             print_banner("https", addr);
             axum_server::bind_rustls(addr, tls_config)
@@ -848,7 +902,10 @@ fn mint_session_id() -> String {
     // Read 16 bytes from /dev/urandom — available on all Linux targets.
     let mut buf = [0u8; 16];
     let ok = std::fs::File::open("/dev/urandom")
-        .and_then(|mut f| { use std::io::Read; f.read_exact(&mut buf) })
+        .and_then(|mut f| {
+            use std::io::Read;
+            f.read_exact(&mut buf)
+        })
         .is_ok();
     if ok {
         format!(
@@ -873,9 +930,20 @@ fn url_encode(s: &str) -> Result<String, ()> {
     for byte in s.as_bytes() {
         match byte {
             // Unreserved ASCII — pass through as-is
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9'
-            | b'-' | b'_' | b'.' | b'~' | b':' | b'/' | b',' | b'[' | b']'
-            | b'{' | b'}' => out.push(*byte as char),
+            b'A'..=b'Z'
+            | b'a'..=b'z'
+            | b'0'..=b'9'
+            | b'-'
+            | b'_'
+            | b'.'
+            | b'~'
+            | b':'
+            | b'/'
+            | b','
+            | b'['
+            | b']'
+            | b'{'
+            | b'}' => out.push(*byte as char),
             // Everything else (including %, space, quotes, newlines, high bytes)
             b => out.push_str(&format!("%{b:02X}")),
         }

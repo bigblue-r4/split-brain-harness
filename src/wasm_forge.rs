@@ -209,7 +209,9 @@ impl WasmCompiler for RustcCompiler {
         // Move child into a thread; wait for output or kill after COMPILE_TIMEOUT.
         let pid = child.id();
         let (tx, rx) = std::sync::mpsc::channel::<std::io::Result<std::process::Output>>();
-        std::thread::spawn(move || { let _ = tx.send(child.wait_with_output()); });
+        std::thread::spawn(move || {
+            let _ = tx.send(child.wait_with_output());
+        });
 
         let result = match rx.recv_timeout(COMPILE_TIMEOUT) {
             Ok(r) => r,

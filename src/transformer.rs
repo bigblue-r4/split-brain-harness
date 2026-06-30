@@ -52,7 +52,11 @@ impl SplitBrainTransformer {
 
     /// Create with a custom corpus and policy.
     pub fn with_corpus(soul: Soul, corpus: ContextCorpus, policy: TransformPolicy) -> Self {
-        Self { soul, corpus, policy }
+        Self {
+            soul,
+            corpus,
+            policy,
+        }
     }
 
     /// Build the augmented system prompt.
@@ -101,8 +105,7 @@ impl SplitBrainTransformer {
 
     /// Parse raw model output into a `ModelProposalOutput` (telemetry + optional capability request).
     pub fn postprocess(&self, raw: &str) -> Result<ModelProposalOutput> {
-        extractor::extract(raw)
-            .map_err(|e| anyhow::anyhow!("postprocess failed: {e}"))
+        extractor::extract(raw).map_err(|e| anyhow::anyhow!("postprocess failed: {e}"))
     }
 }
 
@@ -192,12 +195,10 @@ mod tests {
     #[test]
     fn policy_max_context_chars_limits_injection() {
         let soul = soul::load(None).unwrap();
-        let policy = TransformPolicy { max_context_chars: 100 };
-        let t = SplitBrainTransformer::with_corpus(
-            soul,
-            ContextCorpus::embedded(),
-            policy,
-        );
+        let policy = TransformPolicy {
+            max_context_chars: 100,
+        };
+        let t = SplitBrainTransformer::with_corpus(soul, ContextCorpus::embedded(), policy);
         let system = t.transform_system(&[]);
         // With 100 char limit, the context pack should be present but truncated
         // (possibly just the wrapper tags if no doc fits)
@@ -213,10 +214,15 @@ mod tests {
             text: "custom content for test".into(),
             tags: vec![],
         };
-        let corpus = ContextCorpus { docs: vec![custom_doc] };
+        let corpus = ContextCorpus {
+            docs: vec![custom_doc],
+        };
         let t = SplitBrainTransformer::with_corpus(soul, corpus, TransformPolicy::default());
         let system = t.transform_system(&[]);
-        assert!(system.contains("Custom Test Doc"), "custom doc must appear in system prompt");
+        assert!(
+            system.contains("Custom Test Doc"),
+            "custom doc must appear in system prompt"
+        );
         assert!(system.contains("custom content for test"));
     }
 

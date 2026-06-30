@@ -119,7 +119,10 @@ mod tests {
     #[test]
     fn embedded_corpus_loads_and_has_docs() {
         let corpus = ContextCorpus::embedded();
-        assert!(!corpus.is_empty(), "embedded corpus must have at least one doc");
+        assert!(
+            !corpus.is_empty(),
+            "embedded corpus must have at least one doc"
+        );
         assert!(corpus.len() >= 4, "expected 4 default docs");
     }
 
@@ -127,18 +130,36 @@ mod tests {
     fn embedded_corpus_has_expected_ids() {
         let corpus = ContextCorpus::embedded();
         let ids: Vec<&str> = corpus.docs.iter().map(|d| d.id.as_str()).collect();
-        assert!(ids.contains(&"schema.telemetry"), "missing schema.telemetry");
-        assert!(ids.contains(&"threat.prompt_injection"), "missing threat.prompt_injection");
-        assert!(ids.contains(&"threat.social_engineering"), "missing threat.social_engineering");
-        assert!(ids.contains(&"threat.adversarial_probing"), "missing threat.adversarial_probing");
+        assert!(
+            ids.contains(&"schema.telemetry"),
+            "missing schema.telemetry"
+        );
+        assert!(
+            ids.contains(&"threat.prompt_injection"),
+            "missing threat.prompt_injection"
+        );
+        assert!(
+            ids.contains(&"threat.social_engineering"),
+            "missing threat.social_engineering"
+        );
+        assert!(
+            ids.contains(&"threat.adversarial_probing"),
+            "missing threat.adversarial_probing"
+        );
     }
 
     #[test]
     fn render_produces_context_pack_tags() {
         let corpus = ContextCorpus::embedded();
         let rendered = corpus.render(usize::MAX);
-        assert!(rendered.starts_with("<context_pack>"), "must start with opening tag");
-        assert!(rendered.ends_with("</context_pack>"), "must end with closing tag");
+        assert!(
+            rendered.starts_with("<context_pack>"),
+            "must start with opening tag"
+        );
+        assert!(
+            rendered.ends_with("</context_pack>"),
+            "must end with closing tag"
+        );
         assert!(rendered.contains("## "), "must contain doc headers");
     }
 
@@ -161,12 +182,18 @@ mod tests {
     fn merge_combines_docs() {
         let mut a = ContextCorpus {
             docs: vec![ContextDoc {
-                id: "a".into(), title: "Doc A".into(), text: "text a".into(), tags: vec![],
+                id: "a".into(),
+                title: "Doc A".into(),
+                text: "text a".into(),
+                tags: vec![],
             }],
         };
         let b = ContextCorpus {
             docs: vec![ContextDoc {
-                id: "b".into(), title: "Doc B".into(), text: "text b".into(), tags: vec![],
+                id: "b".into(),
+                title: "Doc B".into(),
+                text: "text b".into(),
+                tags: vec![],
             }],
         };
         a.merge(b);
@@ -197,7 +224,11 @@ mod tests {
         std::fs::write(dir.path().join("b.toml"), toml_b).unwrap();
         std::fs::write(dir.path().join("ignore.txt"), "not toml").unwrap();
         let corpus = ContextCorpus::load_dir(dir.path().to_str().unwrap()).unwrap();
-        assert_eq!(corpus.len(), 2, "must load exactly 2 TOML docs, not the .txt file");
+        assert_eq!(
+            corpus.len(),
+            2,
+            "must load exactly 2 TOML docs, not the .txt file"
+        );
     }
 
     #[test]

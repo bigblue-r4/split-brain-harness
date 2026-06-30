@@ -195,34 +195,46 @@ fn demo_offline_prints_would_have_run() {
 
 #[test]
 fn demo_offline_flag_shows_all_five_cases() {
-    let output = sbh()
-        .args(["demo", "--offline"])
-        .output()
-        .unwrap();
+    let output = sbh().args(["demo", "--offline"]).output().unwrap();
     assert!(output.status.success(), "exit code: {}", output.status);
     let stderr = String::from_utf8_lossy(&output.stderr);
     // All 5 demo cases should appear
-    assert!(stderr.contains("benign operational query"),          "missing benign case");
-    assert!(stderr.contains("direct prompt injection"),           "missing injection case");
-    assert!(stderr.contains("insider threat"),                    "missing insider-threat case");
-    assert!(stderr.contains("foreign adversary"),                 "missing adversary case");
-    assert!(stderr.contains("BEC via AI proxy"),                  "missing BEC case");
+    assert!(
+        stderr.contains("benign operational query"),
+        "missing benign case"
+    );
+    assert!(
+        stderr.contains("direct prompt injection"),
+        "missing injection case"
+    );
+    assert!(
+        stderr.contains("insider threat"),
+        "missing insider-threat case"
+    );
+    assert!(
+        stderr.contains("foreign adversary"),
+        "missing adversary case"
+    );
+    assert!(stderr.contains("BEC via AI proxy"), "missing BEC case");
     // Summary table should appear
     assert!(stderr.contains("Demo Summary"), "missing summary");
-    assert!(stderr.contains("5 analyzed"),  "missing totals");
+    assert!(stderr.contains("5 analyzed"), "missing totals");
 }
 
 #[test]
 fn demo_offline_raw_flag_outputs_json() {
-    let output = sbh()
-        .args(["demo", "--offline", "--raw"])
-        .output()
-        .unwrap();
+    let output = sbh().args(["demo", "--offline", "--raw"]).output().unwrap();
     assert!(output.status.success());
     let stdout = String::from_utf8_lossy(&output.stdout);
     // Each case emits a JSON line; check for known fields
-    assert!(stdout.contains("manipulation_risk"), "expected JSON telemetry fields");
-    assert!(stdout.contains("verification"),      "expected verification field");
+    assert!(
+        stdout.contains("manipulation_risk"),
+        "expected JSON telemetry fields"
+    );
+    assert!(
+        stdout.contains("verification"),
+        "expected verification field"
+    );
 }
 
 // ---------------------------------------------------------------------------

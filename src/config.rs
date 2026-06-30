@@ -34,10 +34,10 @@ fn load_file_config() -> FileConfig {
 /// `anthropic`, `local-embedded`.
 pub fn parse_backend(s: &str) -> (BackendType, &'static str) {
     match s {
-        "openai-compat"  => (BackendType::OpenAiCompat,   "http://localhost:8080"),
-        "anthropic"      => (BackendType::Anthropic,       "https://api.anthropic.com"),
-        "local-embedded" => (BackendType::LocalEmbedded,   ""),
-        "ollama-native"  => (BackendType::OllamaNative,    "http://localhost:11434"),
+        "openai-compat" => (BackendType::OpenAiCompat, "http://localhost:8080"),
+        "anthropic" => (BackendType::Anthropic, "https://api.anthropic.com"),
+        "local-embedded" => (BackendType::LocalEmbedded, ""),
+        "ollama-native" => (BackendType::OllamaNative, "http://localhost:11434"),
         other => {
             eprintln!(
                 "warning: unrecognized SBH_BACKEND={other:?} — \
@@ -51,9 +51,9 @@ pub fn parse_backend(s: &str) -> (BackendType, &'static str) {
 
 pub fn parse_verify_mode(s: &str) -> VerifyMode {
     match s {
-        "llm"  => VerifyMode::Llm,
+        "llm" => VerifyMode::Llm,
         "none" => VerifyMode::None,
-        _      => VerifyMode::Deterministic,
+        _ => VerifyMode::Deterministic,
     }
 }
 
@@ -109,7 +109,9 @@ pub fn build_config() -> Config {
             .and_then(|s| s.parse().ok())
             .or(file.serve_max_body_bytes)
             .unwrap_or(1_048_576),
-        session_log_path: std::env::var("SBH_SESSION_LOG").ok().or(file.session_log_path),
+        session_log_path: std::env::var("SBH_SESSION_LOG")
+            .ok()
+            .or(file.session_log_path),
         context_path: std::env::var("SBH_CONTEXT_PATH").ok().or(file.context_path),
     }
 }
@@ -289,15 +291,30 @@ mod tests {
 
     #[test]
     fn parse_backend_known_values() {
-        assert!(matches!(parse_backend("ollama-native").0, BackendType::OllamaNative));
-        assert!(matches!(parse_backend("openai-compat").0, BackendType::OpenAiCompat));
-        assert!(matches!(parse_backend("anthropic").0, BackendType::Anthropic));
-        assert!(matches!(parse_backend("local-embedded").0, BackendType::LocalEmbedded));
+        assert!(matches!(
+            parse_backend("ollama-native").0,
+            BackendType::OllamaNative
+        ));
+        assert!(matches!(
+            parse_backend("openai-compat").0,
+            BackendType::OpenAiCompat
+        ));
+        assert!(matches!(
+            parse_backend("anthropic").0,
+            BackendType::Anthropic
+        ));
+        assert!(matches!(
+            parse_backend("local-embedded").0,
+            BackendType::LocalEmbedded
+        ));
     }
 
     #[test]
     fn parse_backend_unknown_falls_back_to_ollama() {
         // Falls back to ollama-native with a warning (warning goes to stderr, not assertable here)
-        assert!(matches!(parse_backend("typo-backend").0, BackendType::OllamaNative));
+        assert!(matches!(
+            parse_backend("typo-backend").0,
+            BackendType::OllamaNative
+        ));
     }
 }
