@@ -4,7 +4,7 @@ All notable changes to split-brain-harness are documented here.
 
 ---
 
-## [Unreleased]
+## [1.2.0] — 2026-07-02
 
 ### Security
 
