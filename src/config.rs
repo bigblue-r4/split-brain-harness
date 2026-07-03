@@ -10,6 +10,7 @@ struct FileConfig {
     api_key: Option<String>,
     verify_mode: Option<String>,
     timeout_secs: Option<u64>,
+    temperature: Option<f32>,
     memory_path: Option<String>,
     audit_path: Option<String>,
     serve_key: Option<String>,
@@ -94,6 +95,11 @@ pub fn build_config() -> Config {
             .and_then(|s| s.parse().ok())
             .or(file.timeout_secs)
             .unwrap_or(120),
+        temperature: std::env::var("SBH_TEMPERATURE")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .or(file.temperature)
+            .unwrap_or(0.1),
         dump_prompt: false,
         dump_raw: false,
         memory_path: std::env::var("SBH_MEMORY_PATH").ok().or(file.memory_path),
@@ -131,6 +137,13 @@ pub fn validate_config(config: &Config) -> Result<(), Vec<String>> {
     if config.timeout_secs == 0 {
         errors.push(
             "timeout_secs must be > 0 — set SBH_TIMEOUT_SECONDS or timeout_secs in config.toml"
+                .into(),
+        );
+    }
+
+    if !(0.0..=2.0).contains(&config.temperature) {
+        errors.push(
+            "temperature must be between 0.0 and 2.0 — set SBH_TEMPERATURE or temperature in config.toml"
                 .into(),
         );
     }
@@ -196,6 +209,7 @@ mod tests {
             api_key: None,
             verify_mode: VerifyMode::Deterministic,
             timeout_secs: 120,
+            temperature: 0.1,
             dump_prompt: false,
             dump_raw: false,
             memory_path: None,

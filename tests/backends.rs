@@ -17,6 +17,7 @@ fn make_config(backend: BackendType, api_key: Option<&str>) -> Config {
         api_key: api_key.map(String::from),
         verify_mode: VerifyMode::Deterministic,
         timeout_secs: 5,
+        temperature: 0.1,
         dump_prompt: false,
         dump_raw: false,
         memory_path: None,

@@ -20,7 +20,14 @@ model_name = "llama3.2:3b"
 # api_key = "sk-ant-..."
 
 # Path to a custom soul.md (empty = embedded default)
+# The path is canonicalized and must resolve to a .md file inside the
+# current working directory, your home directory, or /usr/share/sbh.
 # soul_path = "/path/to/soul.md"
+
+# Sampling temperature forwarded to the backend (env: SBH_TEMPERATURE).
+# Default 0.1 — the verification gates assume near-deterministic output.
+# Above 0.5 a randomness discount is applied to verifier confidence.
+# temperature = 0.1
 
 # Verification mode: "deterministic" | "llm" | "none"
 # deterministic — fast consistency checks only, no extra API call (default)

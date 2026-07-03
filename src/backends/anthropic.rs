@@ -7,6 +7,7 @@ pub struct AnthropicEngine {
     pub endpoint: String,
     pub model: String,
     pub api_key: String,
+    pub temperature: f32,
     pub client: Client,
 }
 
@@ -20,6 +21,7 @@ impl InferenceEngine for AnthropicEngine {
         let body = json!({
             "model": self.model,
             "max_tokens": 2048,
+            "temperature": self.temperature,
             "system": system_prompt,
             "messages": [
                 { "role": "user", "content": prompt_payload }

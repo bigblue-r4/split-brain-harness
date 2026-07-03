@@ -6,6 +6,7 @@ use serde_json::json;
 pub struct OpenAiEngine {
     pub endpoint: String,
     pub model: String,
+    pub temperature: f32,
     pub client: Client,
 }
 
@@ -18,7 +19,7 @@ impl InferenceEngine for OpenAiEngine {
                 { "role": "system", "content": system_prompt },
                 { "role": "user",   "content": prompt_payload }
             ],
-            "temperature": 0.1,
+            "temperature": self.temperature,
             "max_tokens": 2048
         });
 

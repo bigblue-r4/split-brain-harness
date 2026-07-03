@@ -73,6 +73,7 @@ fn make_config() -> Config {
         api_key: None,
         verify_mode: VerifyMode::None,
         timeout_secs: 30,
+        temperature: 0.1,
         dump_prompt: false,
         dump_raw: false,
         memory_path: None,

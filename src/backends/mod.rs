@@ -23,11 +23,13 @@ pub fn init_engine(config: &Config) -> Box<dyn InferenceEngine> {
         BackendType::OpenAiCompat => Box::new(openai::OpenAiEngine {
             endpoint: config.endpoint.clone(),
             model: config.model_name.clone(),
+            temperature: config.temperature,
             client,
         }),
         BackendType::OllamaNative => Box::new(ollama::OllamaNativeEngine {
             endpoint: config.endpoint.clone(),
             model: config.model_name.clone(),
+            temperature: config.temperature,
             client,
         }),
         BackendType::LocalEmbedded => Box::new(embedded::LocalEmbeddedEngine {
@@ -37,6 +39,7 @@ pub fn init_engine(config: &Config) -> Box<dyn InferenceEngine> {
             endpoint: config.endpoint.clone(),
             model: config.model_name.clone(),
             api_key: config.api_key.clone().unwrap_or_default(),
+            temperature: config.temperature,
             client,
         }),
     }

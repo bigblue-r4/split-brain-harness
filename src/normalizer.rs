@@ -57,11 +57,25 @@ pub struct Detection {
     pub detail: String,
 }
 
+/// Hard cap on stored detections. A pathological input with thousands of
+/// interleaved obfuscation spans (e.g. repeated base64/Morse fragments) would
+/// otherwise grow the detection vector without bound. Detections past the cap
+/// are dropped; the passes still normalize the text, so nothing is missed in
+/// the cleaned output — only the per-span evidence list is bounded.
+pub const MAX_DETECTIONS: usize = 100;
+
+/// Push a detection unless the cap has been reached.
+fn push_detection(detections: &mut Vec<Detection>, d: Detection) {
+    if detections.len() < MAX_DETECTIONS {
+        detections.push(d);
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct NormalizationResult {
     /// Cleaned text — pass this to Stage 1 instead of the raw input.
     pub normalized: String,
-    /// All detected obfuscation events.
+    /// All detected obfuscation events, capped at [`MAX_DETECTIONS`].
     pub detections: Vec<Detection>,
     /// 0.0 = clean, 1.0 = heavily obfuscated. Threshold ~0.25 for flagging.
     pub obfuscation_score: f32,
@@ -243,12 +257,15 @@ fn pass_bidi(text: &mut String, detections: &mut Vec<Detection>) {
             .filter(|c| BIDI_CONTROLS.contains(c))
             .map(|c| format!("U+{:04X}", c as u32))
             .collect();
-        detections.push(Detection {
-            kind: DetectionKind::BiDiControl,
-            original: original.clone(),
-            normalized: cleaned.clone(),
-            detail: format!("stripped: {}", stripped.join(", ")),
-        });
+        push_detection(
+            detections,
+            Detection {
+                kind: DetectionKind::BiDiControl,
+                original: original.clone(),
+                normalized: cleaned.clone(),
+                detail: format!("stripped: {}", stripped.join(", ")),
+            },
+        );
         *text = cleaned;
     }
 }
@@ -286,12 +303,15 @@ fn pass_fullwidth(text: &mut String, detections: &mut Vec<Detection>) {
             })
             .take(8)
             .collect();
-        detections.push(Detection {
-            kind: DetectionKind::FullwidthChars,
-            original: text.clone(),
-            normalized: normalized.clone(),
-            detail: format!("fullwidth chars normalized (sample: {:?})", sample),
-        });
+        push_detection(
+            detections,
+            Detection {
+                kind: DetectionKind::FullwidthChars,
+                original: text.clone(),
+                normalized: normalized.clone(),
+                detail: format!("fullwidth chars normalized (sample: {:?})", sample),
+            },
+        );
         *text = normalized;
     }
 }
@@ -342,12 +362,15 @@ fn pass_backslash_unescape(text: &mut String, detections: &mut Vec<Detection>) {
     }
 
     if total_stripped >= 3 {
-        detections.push(Detection {
-            kind: DetectionKind::BackslashEscape,
-            original: text.clone(),
-            normalized: result.clone(),
-            detail: format!("stripped {total_stripped} backslash prefixes"),
-        });
+        push_detection(
+            detections,
+            Detection {
+                kind: DetectionKind::BackslashEscape,
+                original: text.clone(),
+                normalized: result.clone(),
+                detail: format!("stripped {total_stripped} backslash prefixes"),
+            },
+        );
         *text = result;
     }
 }
@@ -377,15 +400,18 @@ fn pass_base64(text: &mut String, detections: &mut Vec<Detection>) {
                 let b64_str = &result[after..after + end];
                 if let Some(decoded) = try_decode_b64(b64_str) {
                     let original_chunk = result[start..after + end + 1].to_string();
-                    detections.push(Detection {
-                        kind: DetectionKind::Base64,
-                        original: original_chunk.clone(),
-                        normalized: decoded.clone(),
-                        detail: format!(
-                            "explicit b64 decode → {:?}",
-                            &decoded[..decoded.len().min(60)]
-                        ),
-                    });
+                    push_detection(
+                        detections,
+                        Detection {
+                            kind: DetectionKind::Base64,
+                            original: original_chunk.clone(),
+                            normalized: decoded.clone(),
+                            detail: format!(
+                                "explicit b64 decode → {:?}",
+                                &decoded[..decoded.len().min(60)]
+                            ),
+                        },
+                    );
                     result.replace_range(start..after + end + 1, &decoded);
                 } else {
                     break;
@@ -418,12 +444,15 @@ fn pass_base64(text: &mut String, detections: &mut Vec<Detection>) {
             // Only replace if the decoded text is substantially different from the input
             // and contains ASCII injection keywords
             if decoded.len() >= 8 && is_suspicious_decoded(&decoded) {
-                detections.push(Detection {
-                    kind: DetectionKind::Base64,
-                    original: candidate.to_string(),
-                    normalized: decoded.clone(),
-                    detail: format!("bare base64 → {:?}", &decoded[..decoded.len().min(60)]),
-                });
+                push_detection(
+                    detections,
+                    Detection {
+                        kind: DetectionKind::Base64,
+                        original: candidate.to_string(),
+                        normalized: decoded.clone(),
+                        detail: format!("bare base64 → {:?}", &decoded[..decoded.len().min(60)]),
+                    },
+                );
                 new_result = new_result.replacen(candidate, &decoded, 1);
             }
         }
@@ -536,9 +565,12 @@ fn is_morse_char(c: char) -> bool {
 /// Tolerates unknown codes (returns `None` for each unknown letter).
 /// Returns `None` if fewer than half the letter codes are recognised.
 fn decode_morse_str(morse: &str) -> Option<String> {
-    // Build reverse lookup: pattern → char
-    let lookup: std::collections::HashMap<&str, char> =
-        MORSE_TABLE.iter().map(|(c, p)| (*p, *c)).collect();
+    // Reverse lookup (pattern → char), built once — decode_morse_str runs
+    // per candidate span, so rebuilding the map per call is wasted allocation
+    // on inputs with many Morse-like spans.
+    static LOOKUP: std::sync::OnceLock<std::collections::HashMap<&'static str, char>> =
+        std::sync::OnceLock::new();
+    let lookup = LOOKUP.get_or_init(|| MORSE_TABLE.iter().map(|(c, p)| (*p, *c)).collect());
 
     // Split on word separator first
     let words: Vec<&str> = morse.split(" / ").collect();
@@ -631,16 +663,19 @@ fn pass_morse(text: &mut String, detections: &mut Vec<Detection>) {
 
             if let Some(decoded) = decode_morse_str(&cleaned) {
                 let original: String = chars[span_start..j].iter().collect();
-                detections.push(Detection {
-                    kind: DetectionKind::MorseCode,
-                    original: original.clone(),
-                    normalized: decoded.clone(),
-                    detail: format!(
-                        "Morse span {:?} decoded to {:?}",
-                        &original[..original.len().min(40)],
-                        &decoded[..decoded.len().min(40)]
-                    ),
-                });
+                push_detection(
+                    detections,
+                    Detection {
+                        kind: DetectionKind::MorseCode,
+                        original: original.clone(),
+                        normalized: decoded.clone(),
+                        detail: format!(
+                            "Morse span {:?} decoded to {:?}",
+                            &original[..original.len().min(40)],
+                            &decoded[..decoded.len().min(40)]
+                        ),
+                    },
+                );
                 result.push_str(&decoded);
                 any_decoded = true;
                 i = j;
@@ -722,27 +757,33 @@ fn pass_homoglyphs(text: &mut String, detections: &mut Vec<Detection>) -> f32 {
             .take(8)
             .map(|(orig, rep, pos)| format!("U+{:04X} '{}' @ {pos} → '{rep}'", *orig as u32, orig))
             .collect();
-        detections.push(Detection {
-            kind: DetectionKind::Homoglyph,
-            original: text.clone(),
-            normalized: normalized.clone(),
-            detail: format!(
-                "{} replacement(s): {}",
-                replacements.len(),
-                summary.join("; ")
-            ),
-        });
+        push_detection(
+            detections,
+            Detection {
+                kind: DetectionKind::Homoglyph,
+                original: text.clone(),
+                normalized: normalized.clone(),
+                detail: format!(
+                    "{} replacement(s): {}",
+                    replacements.len(),
+                    summary.join("; ")
+                ),
+            },
+        );
         *text = normalized;
     }
 
     if has_script_intrusion && replacements.is_empty() {
         // Script intrusion without a known homoglyph — still flag it
-        detections.push(Detection {
-            kind: DetectionKind::ScriptIntrusion,
-            original: text.clone(),
-            normalized: text.clone(),
-            detail: "mid-word script switch detected (non-ASCII char inside ASCII word)".into(),
-        });
+        push_detection(
+            detections,
+            Detection {
+                kind: DetectionKind::ScriptIntrusion,
+                original: text.clone(),
+                normalized: text.clone(),
+                detail: "mid-word script switch detected (non-ASCII char inside ASCII word)".into(),
+            },
+        );
     }
 
     interference
@@ -818,15 +859,18 @@ fn pass_leet(text: &mut String, detections: &mut Vec<Detection>) -> f32 {
         .join(" ");
 
     if changed {
-        detections.push(Detection {
-            kind: DetectionKind::Leetspeak,
-            original: text.clone(),
-            normalized: normalized.clone(),
-            detail: format!(
-                "{total_leet} leet substitution(s) in {total_chars} chars (e.g. {:?} → {:?})",
-                sample_before, sample_after
-            ),
-        });
+        push_detection(
+            detections,
+            Detection {
+                kind: DetectionKind::Leetspeak,
+                original: text.clone(),
+                normalized: normalized.clone(),
+                detail: format!(
+                    "{total_leet} leet substitution(s) in {total_chars} chars (e.g. {:?} → {:?})",
+                    sample_before, sample_after
+                ),
+            },
+        );
         *text = normalized;
     }
 
@@ -876,10 +920,16 @@ pub fn summary(result: &NormalizationResult) -> String {
         .iter()
         .map(|d| d.kind.to_string())
         .collect();
+    let cap_note = if result.detections.len() >= MAX_DETECTIONS {
+        " (capped)"
+    } else {
+        ""
+    };
     format!(
-        "obfuscation score {:.2} — {} detection(s): {}",
+        "obfuscation score {:.2} — {} detection(s){}: {}",
         result.obfuscation_score,
         result.detections.len(),
+        cap_note,
         kinds.join(", ")
     )
 }
@@ -891,6 +941,23 @@ pub fn summary(result: &NormalizationResult) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detections_are_capped_on_adversarial_input() {
+        // 300 independent Morse spans, each long/pure enough to decode.
+        // Without the cap this produces 300 Detection entries.
+        let input = "... --- ... .--. .-- X".repeat(300);
+        let r = run(&input);
+        assert!(
+            r.detections.len() <= MAX_DETECTIONS,
+            "detections must be capped at {MAX_DETECTIONS}, got {}",
+            r.detections.len()
+        );
+        assert!(!r.detections.is_empty(), "spans should still be detected");
+        if r.detections.len() >= MAX_DETECTIONS {
+            assert!(summary(&r).contains("(capped)"));
+        }
+    }
 
     #[test]
     fn cyberec_fn_homoglyph_mixed_scripts() {

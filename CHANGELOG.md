@@ -4,6 +4,39 @@ All notable changes to split-brain-harness are documented here.
 
 ---
 
+## [Unreleased]
+
+### Security
+
+**`security` module — path validation and secret redaction**
+- New `src/security.rs` with two hand-rolled utilities (no regex dependency, keeping third-party surface minimal)
+- `validate_soul_path()`: `SBH_SOUL_PATH` / `soul_path` is now canonicalized before reading — must resolve to a regular `.md` file inside cwd, `$HOME`, or `/usr/share/sbh`. Blocks symlink traversal to arbitrary files (e.g. a symlink to `/etc/passwd`)
+- `redact()`: scrubs `key=value` credentials (password, token, api_key, …), bearer tokens, well-known token prefixes (`sk-`, `ghp_`, `AKIA`, JWT, Slack), email addresses, and SSNs
+- Trace evidence in the harness (propose-stage input excerpt, normalizer detection evidence) is now redacted before entering the trace, so secrets in user input no longer persist in JSON trace output
+
+**Bounded detection vector in the normalizer**
+- `NormalizationResult::detections` is now capped at `MAX_DETECTIONS` (100). Pathological inputs with thousands of interleaved obfuscation spans previously grew the vector without bound. Passes still normalize the full text; only the per-span evidence list is bounded. `summary()` notes `(capped)` when the cap is hit
+
+### Added
+
+**Refusal-graded fallback (fewer false positives)**
+- Non-JSON model responses are now classified before falling back: refusal phrases ("I can't…", "I'm sorry…", "…ethical reasons") scanned in the first 200 chars
+- Graded fallback risk: benign refusal with no injection packs active → `low` (previously `medium`); non-refusal garbage → `medium`; anything with injection packs active → `high` (unchanged)
+- Fallback telemetry carries `model_refusal` vs `parse_failure` in `structural_tone`, and the trace entry names the refusal kind
+
+**Configurable sampling temperature + verifier randomness discount**
+- `temperature` config field (env `SBH_TEMPERATURE`, default 0.1), validated to 0.0–2.0, forwarded to all backends — the Anthropic backend previously used the API default (1.0); it now defaults to 0.1 like the others
+- `verifier::randomness_discount()`: above temperature 0.5 the verifier discounts confidence linearly (up to 0.2 at 1.5+) so borderline `stop_and_ask` gates fail closed consistently instead of flipping with the sampling seed; a `verify-randomness` trace entry records the discount
+- `verifier::verify()` now takes the proposer temperature as a parameter
+
+**Reconcile chaos tests**
+- Adjudicator failure modes now covered: parse failure, empty response, timeout/engine error — all degrade gracefully to a full report with a failed `verify-reconcile` trace entry; plus a guard test that the adjudicator does not fire without a fingerprint or high flag density
+
+### Performance
+- Morse reverse-lookup table is built once (`OnceLock`) instead of per decoded span
+
+---
+
 ## [1.1.0] — 2026-06-30
 
 ### Added

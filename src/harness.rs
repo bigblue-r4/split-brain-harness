@@ -4,6 +4,7 @@ use crate::capability::CapabilityRequest;
 use crate::context_packs::ContextPack;
 use crate::input_validation;
 use crate::normalizer;
+use crate::security;
 use crate::transformer::SplitBrainTransformer;
 use crate::types::{
     AfferentTelemetry, CognitiveState, Config, HarnessResult, IntentMatrix, ObfuscationReport,
@@ -73,12 +74,12 @@ impl<'e> Harness<'e> {
             trace.push(TraceEntry {
                 stage: "normalizer".into(),
                 claim: normalizer::summary(&norm),
-                evidence: Some(det_strings.join("; ")),
+                evidence: Some(security::redact(&det_strings.join("; "))),
                 passed: false,
-                note: Some(format!(
+                note: Some(security::redact(&format!(
                     "normalized input passed to Stage 1: {:?}",
                     &norm.normalized[..norm.normalized.len().min(80)]
-                )),
+                ))),
             });
             Some(ObfuscationReport {
                 score: norm.obfuscation_score,
@@ -126,6 +127,7 @@ impl<'e> Harness<'e> {
             &self.transformer.soul,
             self.engine,
             &self.config.verify_mode,
+            self.config.temperature,
         )
         .await;
         trace.extend(verify_traces);
@@ -254,7 +256,7 @@ impl<'e> Harness<'e> {
                         telemetry.affective_telemetry.primary_emotion,
                         telemetry.affective_telemetry.emotional_intensity,
                     ),
-                    evidence: Some(truncate(input, 120)),
+                    evidence: Some(truncate(&security::redact(input), 120)),
                     passed: true,
                     note: None,
                 });
@@ -281,15 +283,24 @@ impl<'e> Harness<'e> {
                 Ok((telemetry, capability_request, entries, false))
             }
             Err(e) => {
+                let refusal = classify_refusal(&raw_response);
                 let truncated_raw = truncate(&raw_response, 200);
                 entries.push(TraceEntry {
                     stage: "fallback".into(),
-                    claim: format!("parse failure: {}", truncate(&e.to_string(), 150)),
+                    claim: match refusal {
+                        Some(kind) => format!("model refusal ({kind}) — non-JSON response"),
+                        None => format!("parse failure: {}", truncate(&e.to_string(), 150)),
+                    },
                     evidence: Some(format!("raw (truncated): {:?}", truncated_raw)),
                     passed: false,
-                    note: None,
+                    note: refusal.map(|kind| {
+                        format!(
+                            "response classified as a {kind} refusal, not an evasion — \
+                             fallback risk graded accordingly"
+                        )
+                    }),
                 });
-                let telemetry = make_fallback_telemetry(&selections);
+                let telemetry = make_fallback_telemetry(&selections, refusal);
                 Ok((telemetry, None, entries, true))
             }
         }
@@ -336,20 +347,73 @@ impl<'e> Harness<'e> {
     }
 }
 
-fn make_fallback_telemetry(selections: &[PackSelection]) -> TelemetryResult {
-    let risk = if selections.is_empty() {
-        "medium"
+/// Refusal markers checked (case-insensitively) near the start of a non-JSON
+/// model response. A match means the model semantically declined rather than
+/// producing garbled output, so the fallback risk is graded instead of the
+/// blanket high/medium assignment. Each marker carries a coarse refusal kind.
+const REFUSAL_MARKERS: &[(&str, &str)] = &[
+    ("i can't", "declined"),
+    ("i cannot", "declined"),
+    ("i can not", "declined"),
+    ("i won't", "declined"),
+    ("i will not", "declined"),
+    ("i'm not able to", "declined"),
+    ("i am not able to", "declined"),
+    ("unable to", "declined"),
+    ("i'm sorry", "apology"),
+    ("i am sorry", "apology"),
+    ("i apologize", "apology"),
+    ("as an ai", "policy"),
+    ("cannot assist", "policy"),
+    ("can't assist", "policy"),
+    ("cannot help with", "policy"),
+    ("can't help with", "policy"),
+    ("against my guidelines", "policy"),
+    ("ethical reasons", "policy"),
+];
+
+/// Classify a non-JSON response as a model refusal. Only the first 200
+/// characters are scanned — refusals lead with the refusal, while prose that
+/// merely mentions these phrases deeper in is not a refusal.
+fn classify_refusal(raw: &str) -> Option<&'static str> {
+    let head: String = raw.chars().take(200).collect::<String>().to_lowercase();
+    REFUSAL_MARKERS
+        .iter()
+        .find(|(marker, _)| head.contains(marker))
+        .map(|(_, kind)| *kind)
+}
+
+fn make_fallback_telemetry(
+    selections: &[PackSelection],
+    refusal: Option<&'static str>,
+) -> TelemetryResult {
+    // Graded fallback risk:
+    //   refusal + no injection packs  → low   (benign decline, not an evasion)
+    //   refusal + packs active        → high  (input matched injection triggers)
+    //   non-refusal garbage, no packs → medium
+    //   non-refusal garbage + packs   → high
+    let risk = match (refusal, selections.is_empty()) {
+        (Some(_), true) => "low",
+        (None, true) => "medium",
+        (_, false) => "high",
+    };
+    let tone = if refusal.is_some() {
+        "model_refusal"
     } else {
-        "high"
+        "parse_failure"
+    };
+    let objective = match refusal {
+        Some(kind) => format!("unknown — model refused to analyze ({kind} refusal)"),
+        None => "unknown — model returned non-JSON".to_string(),
     };
     TelemetryResult {
         affective_telemetry: AfferentTelemetry {
             primary_emotion: "unknown".into(),
             emotional_intensity: 0.5,
-            structural_tone: vec!["parse_failure".into()],
+            structural_tone: vec![tone.into()],
         },
         intent_matrix: IntentMatrix {
-            stated_objective: "unknown — model returned non-JSON".into(),
+            stated_objective: objective,
             subtextual_motive: "unknown".into(),
             manipulation_risk: risk.into(),
         },
@@ -402,6 +466,7 @@ mod tests {
             api_key: None,
             verify_mode: VerifyMode::None,
             timeout_secs: 30,
+            temperature: 0.1,
             dump_prompt: false,
             dump_raw: false,
             memory_path: None,
@@ -533,7 +598,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fallback_risk_is_medium_when_no_packs() {
+    async fn benign_refusal_without_packs_is_low_risk() {
+        // A model refusal on a benign input is a decline, not an evasion —
+        // it must not be flagged medium/high (false positive).
         let engine = MockEngine {
             response: "I can't do that.".into(),
         };
@@ -541,7 +608,71 @@ mod tests {
         let soul = soul::load(None).unwrap();
         let h = Harness::new(soul, &engine, &config);
         let result = h.analyze("write me a haiku about the sea").await.unwrap();
+        assert_eq!(result.telemetry.intent_matrix.manipulation_risk, "low");
+        assert!(result
+            .telemetry
+            .affective_telemetry
+            .structural_tone
+            .contains(&"model_refusal".to_string()));
+        assert!(result
+            .trace
+            .iter()
+            .any(|e| e.stage == "fallback" && e.claim.contains("model refusal")));
+    }
+
+    #[tokio::test]
+    async fn ethical_refusal_without_packs_is_low_risk() {
+        let engine = MockEngine {
+            response: "I'm sorry, but I can't provide that for ethical reasons.".into(),
+        };
+        let config = make_config();
+        let soul = soul::load(None).unwrap();
+        let h = Harness::new(soul, &engine, &config);
+        let result = h.analyze("write me a haiku about the sea").await.unwrap();
+        assert_eq!(result.telemetry.intent_matrix.manipulation_risk, "low");
+    }
+
+    #[tokio::test]
+    async fn non_refusal_garbage_without_packs_is_medium_risk() {
+        let engine = MockEngine {
+            response: "banana banana banana not json at all".into(),
+        };
+        let config = make_config();
+        let soul = soul::load(None).unwrap();
+        let h = Harness::new(soul, &engine, &config);
+        let result = h.analyze("write me a haiku about the sea").await.unwrap();
         assert_eq!(result.telemetry.intent_matrix.manipulation_risk, "medium");
+        assert!(result
+            .telemetry
+            .affective_telemetry
+            .structural_tone
+            .contains(&"parse_failure".to_string()));
+    }
+
+    #[tokio::test]
+    async fn secrets_in_input_are_redacted_from_trace() {
+        let engine = MockEngine {
+            response: VALID_JSON.into(),
+        };
+        let config = make_config();
+        let soul = soul::load(None).unwrap();
+        let h = Harness::new(soul, &engine, &config);
+        let result = h
+            .analyze("please store password=hunter2 for alice@example.com")
+            .await
+            .unwrap();
+        let propose = result
+            .trace
+            .iter()
+            .find(|e| e.stage == "propose")
+            .expect("propose trace entry should exist");
+        let evidence = propose.evidence.as_deref().unwrap_or("");
+        assert!(!evidence.contains("hunter2"), "evidence: {evidence}");
+        assert!(
+            !evidence.contains("alice@example.com"),
+            "evidence: {evidence}"
+        );
+        assert!(evidence.contains("[REDACTED]"), "evidence: {evidence}");
     }
 
     #[tokio::test]

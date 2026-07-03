@@ -6,6 +6,7 @@ use serde_json::json;
 pub struct OllamaNativeEngine {
     pub endpoint: String,
     pub model: String,
+    pub temperature: f32,
     pub client: Client,
 }
 
@@ -20,7 +21,7 @@ impl InferenceEngine for OllamaNativeEngine {
             ],
             "think":  false,
             "stream": false,
-            "options": { "temperature": 0.1, "num_predict": 600 }
+            "options": { "temperature": self.temperature, "num_predict": 600 }
         });
 
         let resp = self

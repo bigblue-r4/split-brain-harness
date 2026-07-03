@@ -13,10 +13,17 @@ const OPEN_CODE_GEN: &str = "[CODE_GEN_SYSTEM_PROMPT]";
 const CLOSE_CODE_GEN: &str = "[/CODE_GEN_SYSTEM_PROMPT]";
 
 /// Load a Soul from disk (if path given) or fall back to the embedded default.
+///
+/// User-supplied paths (e.g. `SBH_SOUL_PATH`) are canonicalized and validated
+/// before reading: the resolved path must be a regular `.md` file inside an
+/// allowed directory. See [`crate::security::validate_soul_path`].
 pub fn load(path: Option<&str>) -> Result<Soul> {
     let raw = match path {
-        Some(p) if !p.is_empty() => std::fs::read_to_string(p)
-            .map_err(|e| anyhow!("failed to read soul file '{}': {}", p, e))?,
+        Some(p) if !p.is_empty() => {
+            let validated = crate::security::validate_soul_path(p)?;
+            std::fs::read_to_string(&validated)
+                .map_err(|e| anyhow!("failed to read soul file '{}': {}", p, e))?
+        }
         _ => DEFAULT_SOUL.to_string(),
     };
     parse(&raw)

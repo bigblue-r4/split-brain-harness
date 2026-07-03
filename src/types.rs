@@ -53,6 +53,12 @@ pub struct Config {
     pub api_key: Option<String>,
     pub verify_mode: VerifyMode,
     pub timeout_secs: u64,
+    /// Sampling temperature forwarded to the backend. Default 0.1 — the
+    /// verification gates assume near-deterministic proposer output.
+    /// Values above 0.5 trigger a randomness discount on verifier confidence
+    /// so borderline stop_and_ask decisions stay consistent across runs.
+    #[serde(default = "default_temperature")]
+    pub temperature: f32,
     /// Print system prompt + payload to stderr before the model call.
     pub dump_prompt: bool,
     /// Print raw model output to stderr before extraction.
@@ -78,6 +84,10 @@ pub struct Config {
     /// Merged with the embedded default corpus and injected into the system prompt.
     /// None = embedded default corpus only.
     pub context_path: Option<String>,
+}
+
+fn default_temperature() -> f32 {
+    0.1
 }
 
 impl std::fmt::Display for BackendType {
