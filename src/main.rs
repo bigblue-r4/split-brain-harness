@@ -1281,18 +1281,11 @@ fn demo_print_result(
     let v = &result.verification;
     let risk = &t.intent_matrix.manipulation_risk;
     let (col, rst) = demo_color(risk, no_color);
-    let verdict = if v.passed {
-        if no_color {
-            "✓ passed".into()
-        } else {
-            format!("\x1b[32m✓ passed\x1b[0m")
-        }
-    } else {
-        if no_color {
-            "✗ flagged".into()
-        } else {
-            format!("\x1b[31m✗ flagged\x1b[0m")
-        }
+    let verdict = match (v.passed, no_color) {
+        (true, true) => "✓ passed",
+        (true, false) => "\x1b[32m✓ passed\x1b[0m",
+        (false, true) => "✗ flagged",
+        (false, false) => "\x1b[31m✗ flagged\x1b[0m",
     };
 
     eprintln!();
@@ -1506,7 +1499,8 @@ fn demo_export_markdown(
         let mut days = (secs / 86400) as u32;
         let mut year = 1970u32;
         loop {
-            let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+            let leap =
+                year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
             let dy = if leap { 366 } else { 365 };
             if days < dy {
                 break;
@@ -1514,7 +1508,8 @@ fn demo_export_markdown(
             days -= dy;
             year += 1;
         }
-        let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+        let leap =
+            year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
         let month_days = [
             31,
             if leap { 29 } else { 28 },

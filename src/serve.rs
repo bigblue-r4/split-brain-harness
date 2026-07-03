@@ -120,8 +120,11 @@ const RATE_LIMITER_SHARDS: usize = 16;
 const MAX_TRACKED_IPS: usize = 50_000;
 const MAX_IPS_PER_SHARD: usize = MAX_TRACKED_IPS / RATE_LIMITER_SHARDS;
 
+/// One shard: request timestamps per IP, guarded independently.
+type RateShard = Mutex<HashMap<IpAddr, VecDeque<Instant>>>;
+
 struct ShardedRateLimiter {
-    shards: Box<[Mutex<HashMap<IpAddr, VecDeque<Instant>>>; RATE_LIMITER_SHARDS]>,
+    shards: Box<[RateShard; RATE_LIMITER_SHARDS]>,
 }
 
 impl ShardedRateLimiter {
@@ -150,7 +153,7 @@ impl ShardedRateLimiter {
             // attack filling all shards still hits per-session caps.
             let expired = shard
                 .iter()
-                .find(|(_, q)| q.back().map_or(true, |&t| now.duration_since(t) > window))
+                .find(|(_, q)| q.back().is_none_or(|&t| now.duration_since(t) > window))
                 .map(|(k, _)| *k);
             match expired {
                 Some(evict) => {
