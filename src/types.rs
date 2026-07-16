@@ -41,6 +41,32 @@ pub enum VerifyMode {
 }
 
 // ---------------------------------------------------------------------------
+// Arbitrator mode (v1.5 active reconciliation)
+// ---------------------------------------------------------------------------
+
+/// Controls the post-verify reconciliation loop.
+#[derive(Debug, Deserialize, Clone, Default, PartialEq, Eq)]
+pub enum ArbitratorMode {
+    /// No refinement loop — one-shot propose→verify→gate (pre-v1.5 behavior).
+    #[serde(rename = "off")]
+    Off,
+    /// Bounded refinement loop adjudicated by deterministic rules (no extra LLM
+    /// call). Default. An `Llm` variant is reserved for v2.
+    #[serde(rename = "rules")]
+    #[default]
+    Rules,
+}
+
+impl std::fmt::Display for ArbitratorMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ArbitratorMode::Off => write!(f, "off"),
+            ArbitratorMode::Rules => write!(f, "rules"),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Runtime configuration
 // ---------------------------------------------------------------------------
 
@@ -84,10 +110,39 @@ pub struct Config {
     /// Merged with the embedded default corpus and injected into the system prompt.
     /// None = embedded default corpus only.
     pub context_path: Option<String>,
+
+    // --- v1.5 active reconciliation ---
+    /// Adjudication mode for the post-verify refinement loop. Default `Rules`.
+    /// `Off` restores one-shot propose→verify behavior.
+    #[serde(default)]
+    pub arbitrator: ArbitratorMode,
+    /// Maximum propose→verify iterations, including the first. Default 2.
+    /// 1 (or `arbitrator = off`) disables refinement.
+    #[serde(default = "default_refine_max_iters")]
+    pub refine_max_iters: usize,
+    /// Confidence at/above which the arbitrator accepts and stops refining.
+    /// Default 0.4 (matches the stop_and_ask threshold).
+    #[serde(default = "default_stop_and_ask_threshold")]
+    pub refine_confidence_target: f32,
+    /// Gate threshold: `stop_and_ask` fires below this confidence. Default 0.4.
+    /// Promotes the previously hardcoded verifier constant to config.
+    #[serde(default = "default_stop_and_ask_threshold")]
+    pub stop_and_ask_threshold: f32,
+    /// Path to the append-only confidence-calibration store (JSONL).
+    /// None = calibration features are not logged.
+    pub calibration_path: Option<String>,
 }
 
 fn default_temperature() -> f32 {
     0.1
+}
+
+fn default_refine_max_iters() -> usize {
+    2
+}
+
+fn default_stop_and_ask_threshold() -> f32 {
+    0.4
 }
 
 impl std::fmt::Display for BackendType {

@@ -1,4 +1,4 @@
-use crate::types::{BackendType, Config, VerifyMode};
+use crate::types::{ArbitratorMode, BackendType, Config, VerifyMode};
 use serde::Deserialize;
 
 #[derive(Deserialize, Default)]
@@ -18,6 +18,11 @@ struct FileConfig {
     serve_max_body_bytes: Option<usize>,
     session_log_path: Option<String>,
     context_path: Option<String>,
+    arbitrator: Option<String>,
+    refine_max_iters: Option<usize>,
+    refine_confidence_target: Option<f32>,
+    stop_and_ask_threshold: Option<f32>,
+    calibration_path: Option<String>,
 }
 
 fn load_file_config() -> FileConfig {
@@ -53,8 +58,24 @@ pub fn parse_backend(s: &str) -> (BackendType, &'static str) {
 pub fn parse_verify_mode(s: &str) -> VerifyMode {
     match s {
         "llm" => VerifyMode::Llm,
+        "reconcile" => VerifyMode::Reconcile,
         "none" => VerifyMode::None,
         _ => VerifyMode::Deterministic,
+    }
+}
+
+/// Maps an arbitrator-mode name to an `ArbitratorMode`. Unknown → default (`Rules`).
+pub fn parse_arbitrator_mode(s: &str) -> ArbitratorMode {
+    match s {
+        "off" => ArbitratorMode::Off,
+        "rules" => ArbitratorMode::Rules,
+        other => {
+            eprintln!(
+                "warning: unrecognized SBH_ARBITRATOR={other:?} — \
+                 valid values: rules, off. Falling back to rules."
+            );
+            ArbitratorMode::Rules
+        }
     }
 }
 
@@ -119,6 +140,29 @@ pub fn build_config() -> Config {
             .ok()
             .or(file.session_log_path),
         context_path: std::env::var("SBH_CONTEXT_PATH").ok().or(file.context_path),
+        arbitrator: std::env::var("SBH_ARBITRATOR")
+            .ok()
+            .or(file.arbitrator)
+            .map(|s| parse_arbitrator_mode(&s))
+            .unwrap_or_default(),
+        refine_max_iters: std::env::var("SBH_REFINE_ITERS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .or(file.refine_max_iters)
+            .unwrap_or(2),
+        refine_confidence_target: std::env::var("SBH_REFINE_TARGET")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .or(file.refine_confidence_target)
+            .unwrap_or(0.4),
+        stop_and_ask_threshold: std::env::var("SBH_STOP_THRESHOLD")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .or(file.stop_and_ask_threshold)
+            .unwrap_or(0.4),
+        calibration_path: std::env::var("SBH_CALIBRATION_PATH")
+            .ok()
+            .or(file.calibration_path),
     }
 }
 
@@ -184,6 +228,27 @@ pub fn validate_config(config: &Config) -> Result<(), Vec<String>> {
         );
     }
 
+    if config.refine_max_iters == 0 {
+        errors.push(
+            "refine_max_iters must be >= 1 — set SBH_REFINE_ITERS or refine_max_iters in config.toml"
+                .into(),
+        );
+    }
+
+    if !(0.0..=1.0).contains(&config.refine_confidence_target) {
+        errors.push(
+            "refine_confidence_target must be between 0.0 and 1.0 — set SBH_REFINE_TARGET or refine_confidence_target in config.toml"
+                .into(),
+        );
+    }
+
+    if !(0.0..=1.0).contains(&config.stop_and_ask_threshold) {
+        errors.push(
+            "stop_and_ask_threshold must be between 0.0 and 1.0 — set SBH_STOP_THRESHOLD or stop_and_ask_threshold in config.toml"
+                .into(),
+        );
+    }
+
     if errors.is_empty() {
         Ok(())
     } else {
@@ -219,6 +284,11 @@ mod tests {
             serve_max_body_bytes: 1_048_576,
             session_log_path: None,
             context_path: None,
+            arbitrator: ArbitratorMode::Rules,
+            refine_max_iters: 2,
+            refine_confidence_target: 0.4,
+            stop_and_ask_threshold: 0.4,
+            calibration_path: None,
         }
     }
 
@@ -321,6 +391,39 @@ mod tests {
             parse_backend("local-embedded").0,
             BackendType::LocalEmbedded
         ));
+    }
+
+    #[test]
+    fn parse_verify_mode_maps_reconcile() {
+        // Regression: "reconcile" previously fell through to Deterministic.
+        assert!(matches!(parse_verify_mode("reconcile"), VerifyMode::Reconcile));
+        assert!(matches!(parse_verify_mode("llm"), VerifyMode::Llm));
+        assert!(matches!(parse_verify_mode("none"), VerifyMode::None));
+        assert!(matches!(parse_verify_mode("anything"), VerifyMode::Deterministic));
+    }
+
+    #[test]
+    fn parse_arbitrator_mode_values() {
+        assert_eq!(parse_arbitrator_mode("off"), ArbitratorMode::Off);
+        assert_eq!(parse_arbitrator_mode("rules"), ArbitratorMode::Rules);
+        // Unknown falls back to Rules (warning to stderr).
+        assert_eq!(parse_arbitrator_mode("typo"), ArbitratorMode::Rules);
+    }
+
+    #[test]
+    fn zero_refine_iters_is_invalid() {
+        let mut c = base_config();
+        c.refine_max_iters = 0;
+        let errs = validate_config(&c).unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("refine_max_iters")));
+    }
+
+    #[test]
+    fn out_of_range_threshold_is_invalid() {
+        let mut c = base_config();
+        c.stop_and_ask_threshold = 1.5;
+        let errs = validate_config(&c).unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("stop_and_ask_threshold")));
     }
 
     #[test]

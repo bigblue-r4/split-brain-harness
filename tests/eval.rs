@@ -83,6 +83,11 @@ fn make_config() -> Config {
         serve_max_body_bytes: 1_048_576,
         session_log_path: None,
         context_path: None,
+        arbitrator: split_brain_harness::types::ArbitratorMode::Rules,
+        refine_max_iters: 2,
+        refine_confidence_target: 0.4,
+        stop_and_ask_threshold: 0.4,
+        calibration_path: None,
     }
 }
 
