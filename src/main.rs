@@ -23,7 +23,11 @@ async fn main() -> Result<()> {
     // doctor, audit, and export-ollama handle their own reporting or need no model.
     let needs_backend = !matches!(
         cmd,
-        Command::Doctor | Command::Audit { .. } | Command::ExportOllama { .. }
+        Command::Doctor
+            | Command::Audit { .. }
+            | Command::ExportOllama { .. }
+            | Command::Calibrate { .. }
+            | Command::Feedback { .. }
     );
     // --dump-prompt exits before any model call, so skip validation there too.
     let is_dump = matches!(
@@ -112,6 +116,12 @@ async fn main() -> Result<()> {
             )
             .await
         }
+        Command::Calibrate { store } => cmd_calibrate(&config, store.as_deref()),
+        Command::Feedback {
+            fingerprint,
+            correct,
+            store,
+        } => cmd_feedback(&config, &fingerprint, correct, store.as_deref()),
     }
 }
 
@@ -165,6 +175,14 @@ enum Command {
         output: Option<String>,
         fail_on_regression: bool,
     },
+    Calibrate {
+        store: Option<String>,
+    },
+    Feedback {
+        fingerprint: String,
+        correct: bool,
+        store: Option<String>,
+    },
 }
 
 /// Collect positional args (non-flag args), skipping values consumed by
@@ -183,6 +201,8 @@ fn positional_args(args: &[String]) -> Vec<&str> {
         "--export",
         "--tls-cert",
         "--tls-key",
+        "--store",
+        "--fingerprint",
     ];
     let mut result = vec![];
     let mut skip_next = false;
@@ -235,6 +255,31 @@ fn parse_command(args: &[String]) -> Result<Command> {
             let tail = flag_value(args, "--tail").and_then(|s| s.parse().ok());
             let since = flag_value(args, "--since");
             return Ok(Command::Audit { tail, since });
+        }
+        Some("calibrate") => {
+            let store = flag_value(args, "--store");
+            return Ok(Command::Calibrate { store });
+        }
+        Some("feedback") => {
+            let fingerprint = flag_value(args, "--fingerprint").ok_or_else(|| {
+                anyhow!(
+                    "feedback requires --fingerprint <fp> and one of --correct / --misread\n\
+                     Usage: split-brain-harness feedback --fingerprint <fp> (--correct | --misread) [--store <path>]"
+                )
+            })?;
+            let correct = args.contains(&"--correct".to_string());
+            let misread = args.contains(&"--misread".to_string());
+            if correct == misread {
+                return Err(anyhow!(
+                    "feedback requires exactly one of --correct or --misread"
+                ));
+            }
+            let store = flag_value(args, "--store");
+            return Ok(Command::Feedback {
+                fingerprint,
+                correct,
+                store,
+            });
         }
         Some("bench") => {
             let input = positional.get(1).map(|s| s.to_string()).ok_or_else(|| {
@@ -367,7 +412,9 @@ fn parse_command(args: &[String]) -> Result<Command> {
              Usage: split-brain-harness debug-bundle [--output <file>] \"input\"\n\
              Usage: split-brain-harness forge \"capability\" \"input\"\n\
              Usage: split-brain-harness serve [--listen <addr>] [--session-log <path>] [--tls-cert <pem>] [--tls-key <pem>]\n\
-             Usage: split-brain-harness bench <file.jsonl> [--baseline <prev.jsonl>] [--output <out.jsonl>] [--fail-on-regression]"
+             Usage: split-brain-harness bench <file.jsonl> [--baseline <prev.jsonl>] [--output <out.jsonl>] [--fail-on-regression]\n\
+             Usage: split-brain-harness calibrate [--store <path>]\n\
+             Usage: split-brain-harness feedback --fingerprint <fp> (--correct | --misread) [--store <path>]"
         ));
     }
 
@@ -819,6 +866,78 @@ fn cmd_audit(
         audit::print_summary(path, &entries);
     }
 
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// calibrate / feedback (confidence calibration — A5)
+// ---------------------------------------------------------------------------
+
+fn resolve_store(
+    config: &split_brain_harness::types::Config,
+    store: Option<&str>,
+) -> Result<String> {
+    store
+        .map(String::from)
+        .or_else(|| config.calibration_path.clone())
+        .ok_or_else(|| {
+            anyhow!("no calibration store — pass --store <path> or set SBH_CALIBRATION_PATH")
+        })
+}
+
+fn cmd_calibrate(
+    config: &split_brain_harness::types::Config,
+    store: Option<&str>,
+) -> Result<()> {
+    use split_brain_harness::calibration;
+    let path = resolve_store(config, store)?;
+    let entries = match calibration::read_all(&path) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            println!("calibration store: {path}  (no entries yet)");
+            return Ok(());
+        }
+        Err(e) => return Err(anyhow!("could not read calibration store at {path}: {e}")),
+    };
+    let samples = calibration::labeled_samples(&entries);
+    println!("calibration store: {path}");
+    println!(
+        "  {} entries · {} labeled sample(s)",
+        entries.len(),
+        samples.len()
+    );
+    match calibration::fit_platt(&samples) {
+        Some(params) => {
+            calibration::save_params(&path, &params)?;
+            println!("  fitted Platt scaling: a={:.4} b={:.4}", params.a, params.b);
+            println!("  wrote {}", calibration::params_path(&path));
+            println!("  runtime confidence will now be recalibrated when this store is configured.");
+        }
+        None => {
+            println!(
+                "  insufficient/unbalanced labeled data to fit (need >= {} labeled samples, both classes present).",
+                calibration::MIN_SAMPLES
+            );
+            println!("  runtime confidence stays uncalibrated (identity) until a fit succeeds.");
+        }
+    }
+    Ok(())
+}
+
+fn cmd_feedback(
+    config: &split_brain_harness::types::Config,
+    fingerprint: &str,
+    correct: bool,
+    store: Option<&str>,
+) -> Result<()> {
+    use split_brain_harness::calibration;
+    let path = resolve_store(config, store)?;
+    let entry = calibration::label_entry(fingerprint, correct);
+    calibration::append(&path, &entry)
+        .map_err(|e| anyhow!("could not append feedback to {path}: {e}"))?;
+    println!(
+        "recorded feedback: fingerprint={fingerprint} correct={correct} → {path}"
+    );
     Ok(())
 }
 

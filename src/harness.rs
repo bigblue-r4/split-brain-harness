@@ -234,12 +234,34 @@ impl<'e> Harness<'e> {
             }
         }
 
+        // Confidence calibration (A5). When enabled, log the raw features for
+        // future fitting, then — only if a fitted model exists — recalibrate the
+        // reported confidence and its gate. With no params file this is a no-op.
+        if let Some(ref cal_path) = self.config.calibration_path {
+            let entry = crate::calibration::entry_from(input, &verification);
+            let _ = crate::calibration::append(cal_path, &entry);
+            if let Some(params) = crate::calibration::load_params(cal_path) {
+                let calibrated = crate::calibration::apply(&params, verification.confidence);
+                verification.confidence = calibrated;
+                verification.stop_and_ask = calibrated < self.config.stop_and_ask_threshold
+                    || verification.consistency_flags.len() >= 3;
+                trace.push(TraceEntry {
+                    stage: "calibration".into(),
+                    claim: format!("confidence recalibrated to {calibrated:.2} (Platt)"),
+                    evidence: None,
+                    passed: true,
+                    note: None,
+                });
+            }
+        }
+
         Ok(HarnessResult {
             telemetry,
             verification,
             trace,
             capability_request,
             obfuscation: obfuscation_report,
+            refinement,
         })
     }
 
