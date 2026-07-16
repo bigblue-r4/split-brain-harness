@@ -54,6 +54,12 @@ cognitive_state:
                        A CEO demanding an unauthorized wire transfer "right now" = high urgency_vector.
   coherence_rating   — Float 0.0–1.0. Tracks whether the input is rational or scattered/chaotic.
 
+rationale            — A single short paragraph (plain language, <= 60 words) explaining WHY you
+                       assigned this telemetry: the specific signals in the input that drove the
+                       manipulation_risk, emotion, and urgency reads. This is a top-level field, a
+                       sibling of the telemetry objects — never place it inside them. It is an
+                       explanation aid; keep it factual and grounded in the input text.
+
 Output exactly this JSON structure and nothing else:
 {
   "affective_telemetry": {
@@ -69,7 +75,8 @@ Output exactly this JSON structure and nothing else:
   "cognitive_state": {
     "urgency_vector": 0.0,
     "coherence_rating": 0.0
-  }
+  },
+  "rationale": "STRING"
 }
 
 OPTIONAL CAPABILITY REQUEST EXTENSION:

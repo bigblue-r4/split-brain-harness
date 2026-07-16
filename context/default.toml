@@ -22,6 +22,11 @@ designed to bypass the AI's normal process.
 
 coherence_rating (0.0-1.0): below 0.3 means input is too scattered for reliable analysis.
 emotional_intensity (0.0-1.0): measures the strength of affective signal, not threat level.
+
+rationale (optional, top-level string): one short paragraph explaining WHY the telemetry
+values were chosen -- the concrete signals in the input that drove them. It sits alongside
+the telemetry objects, never inside them, and does not affect scoring; it aids debugging and
+user-facing explanation.
 """
 
 [[docs]]

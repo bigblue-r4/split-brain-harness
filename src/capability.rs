@@ -257,6 +257,12 @@ pub struct ModelProposalOutput {
     pub telemetry: crate::types::TelemetryResult,
     #[serde(default)]
     pub capability_request: Option<CapabilityRequest>,
+    /// Optional one-paragraph, plain-language explanation of the proposer's read.
+    /// Top-level (not inside the deny_unknown_fields telemetry sub-structs) so
+    /// existing responses without it still parse. Debug/explanation aid only —
+    /// it does not affect verification.
+    #[serde(default)]
+    pub rationale: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

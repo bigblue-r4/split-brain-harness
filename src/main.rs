@@ -513,6 +513,9 @@ fn print_result_pretty(r: &HarnessResult) {
         "  {DIM}subtext{R}    {}",
         r.telemetry.intent_matrix.subtextual_motive
     );
+    if let Some(rat) = r.trace.iter().find(|t| t.stage == "rationale") {
+        println!("  {DIM}rationale{R}  {DIM}{}{R}", rat.claim);
+    }
     println!("{DIM}{rule}{R}");
     let supported = if r.verification.passed {
         "passed"

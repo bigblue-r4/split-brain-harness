@@ -247,6 +247,7 @@ impl<'e> Harness<'e> {
             Ok(output) => {
                 let telemetry = output.telemetry;
                 let capability_request = output.capability_request;
+                let rationale = output.rationale;
 
                 entries.push(TraceEntry {
                     stage: "propose".into(),
@@ -260,6 +261,17 @@ impl<'e> Harness<'e> {
                     passed: true,
                     note: None,
                 });
+
+                // Optional proposer self-explanation (A1). Debug/UX aid only.
+                if let Some(text) = rationale.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                    entries.push(TraceEntry {
+                        stage: "rationale".into(),
+                        claim: truncate(&security::redact(text), 500),
+                        evidence: None,
+                        passed: true,
+                        note: None,
+                    });
+                }
 
                 if let Some(ref req) = capability_request {
                     let valid = req.validate().is_ok();
