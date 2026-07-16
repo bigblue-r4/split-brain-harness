@@ -286,6 +286,61 @@ pub struct ObfuscationReport {
     pub normalized_input: String,
 }
 
+// ---------------------------------------------------------------------------
+// Active reconciliation (v1.5): refinement loop + arbitrator
+// ---------------------------------------------------------------------------
+
+/// The arbitrator's verdict over a set of propose→verify iterations.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub enum ArbiterVerdict {
+    /// A revision cleared the bar — surface it as the result.
+    #[serde(rename = "accept")]
+    Accept,
+    /// Disagreement persists and budget remains — propose again with feedback.
+    #[serde(rename = "re_refine")]
+    ReRefine,
+    /// Budget exhausted without resolution — surface the best attempt and force
+    /// stop_and_ask.
+    #[serde(rename = "escalate")]
+    Escalate,
+}
+
+impl std::fmt::Display for ArbiterVerdict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ArbiterVerdict::Accept => write!(f, "accept"),
+            ArbiterVerdict::ReRefine => write!(f, "re_refine"),
+            ArbiterVerdict::Escalate => write!(f, "escalate"),
+        }
+    }
+}
+
+/// The arbitrator's decision: which iteration to surface and why.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ArbiterDecision {
+    pub verdict: ArbiterVerdict,
+    /// Index into `RefinementTrace::iterations` chosen as the final result.
+    pub chosen_iteration: usize,
+    pub reasoning: String,
+}
+
+/// Summary of one propose→verify pass inside the refinement loop.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RefinementIteration {
+    pub iteration: usize,
+    pub confidence: f32,
+    pub passed: bool,
+    pub stop_and_ask: bool,
+    pub flag_count: usize,
+}
+
+/// The full refinement record — present only when the arbitrator loop ran.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RefinementTrace {
+    pub iterations: Vec<RefinementIteration>,
+    pub decision: ArbiterDecision,
+}
+
 /// Full pipeline output: telemetry + verification + step-level trace.
 /// `capability_request` is `None` unless the model emitted one alongside
 /// its telemetry (Phase 1 schema — no execution in this release).
@@ -299,4 +354,8 @@ pub struct HarnessResult {
     /// Present when the input required deobfuscation before Stage 1.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub obfuscation: Option<ObfuscationReport>,
+    /// Present when the active-reconciliation loop ran (arbitrator = rules).
+    /// Absent (skipped) when arbitrator = off or only a single pass ran.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub refinement: Option<RefinementTrace>,
 }

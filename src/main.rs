@@ -528,6 +528,15 @@ fn print_result_pretty(r: &HarnessResult) {
         String::new()
     };
     println!("  {DIM}verification{R}  {supported}  {DIM}conf:{R} {conf_color}{conf:.2}{R}{sas}");
+    if let Some(ref refinement) = r.refinement {
+        if refinement.iterations.len() > 1 || refinement.decision.verdict != split_brain_harness::types::ArbiterVerdict::Accept {
+            println!(
+                "  {DIM}refinement{R}   {} iteration(s) · {DIM}verdict:{R} {}",
+                refinement.iterations.len(),
+                refinement.decision.verdict
+            );
+        }
+    }
     if r.verification.consistency_flags.is_empty() {
         println!("  {DIM}flags{R}         none");
     } else {
@@ -1124,6 +1133,7 @@ fn demo_offline_result(idx: usize) -> HarnessResult {
             trace: vec![],
             capability_request: None,
             obfuscation: None,
+            refinement: None,
         },
         // case 1 — direct prompt injection, system exfiltration
         1 => HarnessResult {
@@ -1156,6 +1166,7 @@ fn demo_offline_result(idx: usize) -> HarnessResult {
             trace: vec![],
             capability_request: None,
             obfuscation: None,
+            refinement: None,
         },
         // case 2 — insider threat, access scoping
         2 => HarnessResult {
@@ -1188,6 +1199,7 @@ fn demo_offline_result(idx: usize) -> HarnessResult {
             trace: vec![],
             capability_request: None,
             obfuscation: None,
+            refinement: None,
         },
         // case 3 — foreign adversary, authority impersonation
         3 => HarnessResult {
@@ -1221,6 +1233,7 @@ fn demo_offline_result(idx: usize) -> HarnessResult {
             trace: vec![],
             capability_request: None,
             obfuscation: None,
+            refinement: None,
         },
         // case 4 — BEC via AI proxy, financial coercion
         _ => HarnessResult {
@@ -1254,6 +1267,7 @@ fn demo_offline_result(idx: usize) -> HarnessResult {
             trace: vec![],
             capability_request: None,
             obfuscation: None,
+            refinement: None,
         },
     }
 }
@@ -1666,7 +1680,7 @@ fn demo_serve_offline_result(idx: usize) -> HarnessResult {
                 assumptions: vec![], unresolved: vec![], confidence: 0.91,
                 disagreement: Default::default(), stop_and_ask: false,
             },
-            trace: vec![], capability_request: None, obfuscation: None,
+            trace: vec![], capability_request: None, obfuscation: None, refinement: None,
         },
         1 => HarnessResult {
             telemetry: TelemetryResult {
@@ -1687,7 +1701,7 @@ fn demo_serve_offline_result(idx: usize) -> HarnessResult {
                 assumptions: vec![], unresolved: vec![], confidence: 0.93,
                 disagreement: Default::default(), stop_and_ask: false,
             },
-            trace: vec![], capability_request: None, obfuscation: None,
+            trace: vec![], capability_request: None, obfuscation: None, refinement: None,
         },
         2 => HarnessResult {
             telemetry: TelemetryResult {
@@ -1711,7 +1725,7 @@ fn demo_serve_offline_result(idx: usize) -> HarnessResult {
                 unsupported_claims: vec![], assumptions: vec![], unresolved: vec![],
                 confidence: 0.74, disagreement: Default::default(), stop_and_ask: false,
             },
-            trace: vec![], capability_request: None, obfuscation: None,
+            trace: vec![], capability_request: None, obfuscation: None, refinement: None,
         },
         3 => HarnessResult {
             telemetry: TelemetryResult {
@@ -1736,7 +1750,7 @@ fn demo_serve_offline_result(idx: usize) -> HarnessResult {
                 unsupported_claims: vec![], assumptions: vec![], unresolved: vec![],
                 confidence: 0.14, disagreement: Default::default(), stop_and_ask: true,
             },
-            trace: vec![], capability_request: None, obfuscation: None,
+            trace: vec![], capability_request: None, obfuscation: None, refinement: None,
         },
         _ => HarnessResult {
             telemetry: TelemetryResult {
@@ -1761,7 +1775,7 @@ fn demo_serve_offline_result(idx: usize) -> HarnessResult {
                 unsupported_claims: vec![], assumptions: vec![], unresolved: vec![],
                 confidence: 0.11, disagreement: Default::default(), stop_and_ask: true,
             },
-            trace: vec![], capability_request: None, obfuscation: None,
+            trace: vec![], capability_request: None, obfuscation: None, refinement: None,
         },
     }
 }

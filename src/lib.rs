@@ -1,6 +1,8 @@
 pub mod adaptor;
+pub mod arbitrator;
 pub mod audit;
 pub mod backends;
+pub mod calibration;
 pub mod capability;
 pub mod code_gen;
 pub mod config;

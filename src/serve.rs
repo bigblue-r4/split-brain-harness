@@ -1164,6 +1164,7 @@ mod tests {
             trace: vec![],
             capability_request: None,
             obfuscation: None,
+            refinement: None,
         };
         let s = summarize_result(&result);
         assert!(s.contains("neutral"));

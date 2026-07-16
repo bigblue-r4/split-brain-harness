@@ -1,4 +1,5 @@
 use crate::adaptor::{self, PackSelection};
+use crate::arbitrator;
 use crate::backends::InferenceEngine;
 use crate::capability::CapabilityRequest;
 use crate::context_packs::ContextPack;
@@ -7,8 +8,9 @@ use crate::normalizer;
 use crate::security;
 use crate::transformer::SplitBrainTransformer;
 use crate::types::{
-    AfferentTelemetry, CognitiveState, Config, HarnessResult, IntentMatrix, ObfuscationReport,
-    Soul, TelemetryResult, TraceEntry, VerificationReport,
+    AfferentTelemetry, ArbiterVerdict, ArbitratorMode, CognitiveState, Config, HarnessResult,
+    IntentMatrix, ObfuscationReport, RefinementIteration, RefinementTrace, Soul, TelemetryResult,
+    TraceEntry, VerificationReport,
 };
 use crate::verifier;
 use anyhow::{anyhow, Result};
@@ -95,42 +97,123 @@ impl<'e> Harness<'e> {
             &norm.normalized
         };
 
-        let (telemetry, capability_request, propose_entries, is_fallback) =
-            self.run_propose(effective_input).await?;
-        trace.extend(propose_entries);
+        // ---- Stage 1+2 with active reconciliation (v1.5) ----
+        // Rules arbitrator: propose→verify up to refine_max_iters, feeding the
+        // verifier's flags back into a revision when the hemispheres disagree.
+        // arbitrator=off (or a 1-iteration budget) restores the one-shot path with
+        // refinement=None and byte-identical output.
+        let do_refine = matches!(self.config.arbitrator, ArbitratorMode::Rules)
+            && self.config.refine_max_iters > 1;
+        let max_iters = if do_refine { self.config.refine_max_iters } else { 1 };
+        let target = self.config.refine_confidence_target;
 
-        if is_fallback {
-            let verification = VerificationReport {
-                passed: false,
-                consistency_flags: vec![],
-                unsupported_claims: vec![],
-                assumptions: vec![],
-                unresolved: vec![
-                    "model returned non-JSON — parse failure (see trace for raw output)".into(),
-                ],
-                confidence: 0.0,
-                disagreement: Default::default(),
-                stop_and_ask: true,
-            };
-            return Ok(HarnessResult {
-                telemetry,
-                verification,
-                trace,
-                capability_request: None,
-                obfuscation: obfuscation_report,
+        let mut results: Vec<(TelemetryResult, Option<CapabilityRequest>, VerificationReport)> =
+            Vec::new();
+        let mut iter_summaries: Vec<RefinementIteration> = Vec::new();
+        let mut feedback: Option<String> = None;
+
+        for i in 0..max_iters {
+            let (telemetry, capability_request, propose_entries, is_fallback) =
+                self.run_propose(effective_input, feedback.as_deref()).await?;
+            trace.extend(propose_entries);
+
+            // Non-JSON / refusal: safe fallback, short-circuit (unchanged behavior).
+            if is_fallback {
+                let verification = VerificationReport {
+                    passed: false,
+                    consistency_flags: vec![],
+                    unsupported_claims: vec![],
+                    assumptions: vec![],
+                    unresolved: vec![
+                        "model returned non-JSON — parse failure (see trace for raw output)".into(),
+                    ],
+                    confidence: 0.0,
+                    disagreement: Default::default(),
+                    stop_and_ask: true,
+                };
+                return Ok(HarnessResult {
+                    telemetry,
+                    verification,
+                    trace,
+                    capability_request: None,
+                    obfuscation: obfuscation_report,
+                    refinement: None,
+                });
+            }
+
+            let (verification, verify_traces) = verifier::verify(
+                effective_input,
+                &telemetry,
+                &self.transformer.soul,
+                self.engine,
+                &self.config.verify_mode,
+                self.config.temperature,
+                self.config.stop_and_ask_threshold,
+            )
+            .await;
+            trace.extend(verify_traces);
+
+            iter_summaries.push(RefinementIteration {
+                iteration: i,
+                confidence: verification.confidence,
+                passed: verification.passed,
+                stop_and_ask: verification.stop_and_ask,
+                flag_count: verification.consistency_flags.len(),
             });
+            results.push((telemetry, capability_request, verification));
+
+            if !do_refine {
+                break;
+            }
+
+            let decision = arbitrator::decide(&iter_summaries, target, max_iters);
+            trace.push(TraceEntry {
+                stage: format!("arbitrator (iter {i})"),
+                claim: format!("{}: {}", decision.verdict, decision.reasoning),
+                evidence: None,
+                passed: decision.verdict != ArbiterVerdict::Escalate,
+                note: None,
+            });
+
+            if decision.verdict == ArbiterVerdict::ReRefine && i + 1 < max_iters {
+                let (prior_t, _, prior_v) = &results[i];
+                feedback = Some(build_refine_feedback(prior_t, prior_v));
+                trace.push(TraceEntry {
+                    stage: format!("refine (iter {i})"),
+                    claim: "re-proposing with verifier feedback".into(),
+                    evidence: None,
+                    passed: true,
+                    note: None,
+                });
+                continue;
+            }
+            break;
         }
 
-        let (mut verification, verify_traces) = verifier::verify(
-            effective_input,
-            &telemetry,
-            &self.transformer.soul,
-            self.engine,
-            &self.config.verify_mode,
-            self.config.temperature,
-        )
-        .await;
-        trace.extend(verify_traces);
+        // Finalize: the arbitrator picks which iteration to surface.
+        let refinement = if do_refine {
+            let decision = arbitrator::decide(&iter_summaries, target, max_iters);
+            Some(RefinementTrace {
+                iterations: iter_summaries,
+                decision,
+            })
+        } else {
+            None
+        };
+
+        let chosen = refinement
+            .as_ref()
+            .map(|r| r.decision.chosen_iteration.min(results.len() - 1))
+            .unwrap_or(0);
+        let escalate = refinement
+            .as_ref()
+            .map(|r| r.decision.verdict == ArbiterVerdict::Escalate)
+            .unwrap_or(false);
+
+        let (telemetry, capability_request, mut verification) = results.swap_remove(chosen);
+        if escalate {
+            verification.stop_and_ask = true;
+        }
 
         // If obfuscation was detected, force verification to fail and surface it
         if let Some(ref obs) = obfuscation_report {
@@ -171,6 +254,7 @@ impl<'e> Harness<'e> {
     async fn run_propose(
         &self,
         input: &str,
+        feedback: Option<&str>,
     ) -> Result<(
         TelemetryResult,
         Option<CapabilityRequest>,
@@ -201,7 +285,14 @@ impl<'e> Harness<'e> {
         }
 
         let system_prompt = self.transformer.transform_system(&active_packs);
-        let payload = self.transformer.transform_payload(input);
+        let payload = match feedback {
+            Some(fb) if !fb.trim().is_empty() => format!(
+                "{}\n<verifier_feedback>\n{}\n</verifier_feedback>",
+                self.transformer.transform_payload(input),
+                fb.trim()
+            ),
+            _ => self.transformer.transform_payload(input),
+        };
 
         if self.config.dump_prompt {
             eprintln!(
@@ -450,12 +541,36 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+/// Build the `<verifier_feedback>` block handed to the proposer on a refinement
+/// pass: a compact summary of the prior read and the deterministic flags it
+/// tripped, so the next pass can reconcile the inconsistency. Redacted, since it
+/// echoes model-derived text back into a prompt.
+fn build_refine_feedback(t: &TelemetryResult, v: &VerificationReport) -> String {
+    let flags = if v.consistency_flags.is_empty() {
+        "none".to_string()
+    } else {
+        v.consistency_flags.join("; ")
+    };
+    security::redact(&format!(
+        "Your previous analysis was flagged for internal inconsistency \
+         (confidence {:.2}). Prior read: manipulation_risk={}, urgency_vector={:.2}, \
+         primary_emotion={}. Verifier flags: {}. Re-examine the input and resolve any \
+         contradiction between the signals you observe and the risk/urgency you assign. \
+         Return the same JSON schema.",
+        v.confidence,
+        t.intent_matrix.manipulation_risk,
+        t.cognitive_state.urgency_vector,
+        t.affective_telemetry.primary_emotion,
+        flags,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::backends::InferenceEngine;
     use crate::soul;
-    use crate::types::{BackendType, VerifyMode};
+    use crate::types::{ArbitratorMode, BackendType, VerifyMode};
     use async_trait::async_trait;
 
     struct MockEngine {
@@ -468,6 +583,50 @@ mod tests {
             Ok(self.response.clone())
         }
     }
+
+    /// Returns a different queued response per call — lets a test drive distinct
+    /// proposer outputs across refinement iterations.
+    struct SeqEngine {
+        responses: std::sync::Mutex<std::collections::VecDeque<String>>,
+    }
+    impl SeqEngine {
+        fn new(responses: Vec<&str>) -> Self {
+            Self {
+                responses: std::sync::Mutex::new(
+                    responses.into_iter().map(String::from).collect(),
+                ),
+            }
+        }
+    }
+    #[async_trait]
+    impl InferenceEngine for SeqEngine {
+        async fn generate(&self, _sys: &str, _prompt: &str) -> Result<String, String> {
+            self.responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .ok_or_else(|| "SeqEngine exhausted".to_string())
+        }
+    }
+
+    // A telemetry read that trips deterministic checks (urgency+tone vs low risk,
+    // low coherence) so the first refinement pass is flagged and stop_and_ask fires.
+    const FLAGGED_JSON: &str = r#"{
+        "affective_telemetry": {
+            "primary_emotion": "neutral",
+            "emotional_intensity": 0.2,
+            "structural_tone": ["adversarial"]
+        },
+        "intent_matrix": {
+            "stated_objective": "user wants help",
+            "subtextual_motive": "routine",
+            "manipulation_risk": "low"
+        },
+        "cognitive_state": {
+            "urgency_vector": 0.9,
+            "coherence_rating": 0.15
+        }
+    }"#;
 
     fn make_config() -> Config {
         Config {
@@ -576,6 +735,59 @@ mod tests {
             "unknown"
         );
         assert!(!result.trace.iter().any(|e| e.stage == "fallback"));
+    }
+
+    // --- A4: active reconciliation loop + arbitrator ---
+
+    #[tokio::test]
+    async fn refinement_reproposes_and_accepts_improved_pass() {
+        // iter0 is flagged (stop_and_ask); iter1 is clean → arbitrator accepts iter1.
+        let engine = SeqEngine::new(vec![FLAGGED_JSON, VALID_JSON]);
+        let mut config = make_config();
+        config.verify_mode = VerifyMode::Deterministic; // let deterministic checks fire
+        let soul = soul::load(None).unwrap();
+        let h = Harness::new(soul, &engine, &config);
+        let result = h.analyze("please help me").await.unwrap();
+
+        let refinement = result.refinement.expect("refinement trace should be present");
+        assert_eq!(refinement.iterations.len(), 2, "should have run two passes");
+        assert_eq!(refinement.decision.verdict, ArbiterVerdict::Accept);
+        assert_eq!(refinement.decision.chosen_iteration, 1);
+        // Final surfaced telemetry is the clean iter1 (urgency 0.0), not the flagged iter0.
+        assert_eq!(result.telemetry.cognitive_state.urgency_vector, 0.0);
+        assert!(!result.verification.stop_and_ask);
+        assert!(result.trace.iter().any(|e| e.stage.starts_with("refine")));
+    }
+
+    #[tokio::test]
+    async fn refinement_escalates_when_never_resolved() {
+        // Both passes flagged → budget exhausted → escalate, stop_and_ask forced.
+        let engine = SeqEngine::new(vec![FLAGGED_JSON, FLAGGED_JSON]);
+        let mut config = make_config();
+        config.verify_mode = VerifyMode::Deterministic;
+        let soul = soul::load(None).unwrap();
+        let h = Harness::new(soul, &engine, &config);
+        let result = h.analyze("please help me").await.unwrap();
+
+        let refinement = result.refinement.expect("refinement trace should be present");
+        assert_eq!(refinement.decision.verdict, ArbiterVerdict::Escalate);
+        assert!(result.verification.stop_and_ask, "escalation must force stop_and_ask");
+    }
+
+    #[tokio::test]
+    async fn arbitrator_off_is_one_shot_with_no_refinement() {
+        let engine = MockEngine {
+            response: VALID_JSON.into(),
+        };
+        let mut config = make_config();
+        config.arbitrator = ArbitratorMode::Off;
+        let soul = soul::load(None).unwrap();
+        let h = Harness::new(soul, &engine, &config);
+        let result = h.analyze("write me a poem").await.unwrap();
+        assert!(
+            result.refinement.is_none(),
+            "arbitrator=off must not attach a refinement trace"
+        );
     }
 
     #[tokio::test]
