@@ -533,7 +533,7 @@ mod tests {
     #[test]
     fn two_forge_instances_do_not_share_memory() {
         let mut forge_a = Forge::new();
-        let mut forge_b = Forge::new();
+        let forge_b = Forge::new();
 
         forge_a.handle(&clean_req("word_count"), "a");
         assert_eq!(

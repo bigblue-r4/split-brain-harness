@@ -6,6 +6,10 @@ use crate::types::{
 };
 use serde::Deserialize;
 
+/// Default stop_and_ask threshold. The runtime value is configurable and
+/// threaded into `verify()`; this constant is retained as the default used by
+/// tests that replicate the gate.
+#[cfg(test)]
 const STOP_AND_ASK_THRESHOLD: f32 = 0.4;
 
 type CheckFn = Box<dyn Fn(&TelemetryResult) -> Option<String>>;
@@ -37,6 +41,7 @@ pub async fn verify(
     engine: &dyn InferenceEngine,
     mode: &VerifyMode,
     temperature: f32,
+    stop_and_ask_threshold: f32,
 ) -> (VerificationReport, Vec<TraceEntry>) {
     let mut traces = vec![];
 
@@ -134,7 +139,7 @@ pub async fn verify(
         }
     }
 
-    let stop_and_ask = confidence < STOP_AND_ASK_THRESHOLD || consistency_flags.len() >= 3;
+    let stop_and_ask = confidence < stop_and_ask_threshold || consistency_flags.len() >= 3;
     let passed = consistency_flags.is_empty() && unsupported_claims.is_empty();
 
     let report = VerificationReport {
@@ -165,7 +170,26 @@ pub fn randomness_discount(temperature: f32) -> f32 {
 // ---------------------------------------------------------------------------
 
 /// Total number of deterministic checks (keep in sync with check_consistency).
-const TOTAL_CHECKS: usize = 6;
+const TOTAL_CHECKS: usize = 8;
+
+/// Sum of all per-check weights (keep in sync with `flag_weight` and the check
+/// weights in `check_consistency`): 4 risk-mismatch checks @ 2.0 + 4 others @ 1.0.
+const TOTAL_WEIGHT: f32 = 12.0;
+
+/// Weight of a fired flag, matched by a distinctive substring of its check's
+/// message. Manipulation-risk-mismatch checks weigh 2x; everything else 1.0.
+fn flag_weight(flag: &str) -> f32 {
+    if flag.contains("with hostile emotion")               // emotion-intensity vs risk
+        || flag.contains("conflicts with manipulation_risk=low") // adversarial tone vs risk
+        || flag.contains("urgency may be manufactured")    // urgency vs risk
+        || flag.contains("high risk requires coercive signals") // high-risk vs non-coercive
+    {
+        2.0
+    } else {
+        // coherence, risk-value, hidden_payload, value_alignment, obfuscation, unknown
+        1.0
+    }
+}
 
 /// Compute a structured disagreement score from the verification result.
 ///
@@ -188,6 +212,16 @@ pub fn compute_disagreement_score(
 ) -> DisagreementScore {
     let flag_count = flags.len();
     let flag_density = flag_count as f32 / TOTAL_CHECKS as f32;
+
+    // Per-check weighting (A3). Manipulation-risk-mismatch checks carry 2x weight —
+    // a proposer asserting low/benign risk against hostile/urgent/coercive signals is
+    // the highest-value disagreement. Flags are matched by a distinctive substring of
+    // each check's message; anything unmatched defaults to weight 1.0. Total possible
+    // weight is 12.0, so the weighted density still normalizes to 0..1 like the raw
+    // density (preserving the penalty scale) while redistributing emphasis.
+    // NOTE: weights are hardcoded here; user-editable TOML weights are a roadmap item.
+    let fired_weight: f32 = flags.iter().map(|f| flag_weight(f)).sum();
+    let weighted_density = (fired_weight / TOTAL_WEIGHT).clamp(0.0, 1.0);
 
     // Count distinct analytical dimensions that fired.
     let affective_fired = flags.iter().any(|f| f.contains("emotional_intensity"));
@@ -229,7 +263,7 @@ pub fn compute_disagreement_score(
     //   - fingerprint_penalty: hard 0.25 discount when injection pattern detected
     //   - blend with llm_confidence if available
     let base = telemetry.cognitive_state.coherence_rating;
-    let density_penalty = flag_density * 0.40;
+    let density_penalty = weighted_density * 0.40;
     let spread_discount = if flag_count >= 2 && dimension_spread == 1 {
         0.05
     } else {
@@ -1067,20 +1101,38 @@ mod tests {
     }
 
     #[test]
+    fn weighted_density_favors_risk_mismatch_flags() {
+        // A single 2x-weighted risk-mismatch flag must penalize confidence more
+        // than a single 1x flag, given identical base coherence.
+        let t = make_telemetry("neutral", 0.2, vec![], "low", 0.2, 0.90);
+        let risk_flag: Vec<String> =
+            vec!["high urgency_vector (0.85) with manipulation_risk=low — urgency may be manufactured".into()];
+        let plain_flag: Vec<String> =
+            vec!["coherence_rating=0.20 — input may be too incoherent for reliable analysis".into()];
+        let risk_conf = compute_disagreement_score(&t, &risk_flag, None).adjusted_confidence;
+        let plain_conf = compute_disagreement_score(&t, &plain_flag, None).adjusted_confidence;
+        assert!(
+            risk_conf < plain_conf,
+            "2x risk-mismatch flag ({risk_conf}) should drop confidence more than a 1x flag ({plain_conf})"
+        );
+    }
+
+    #[test]
     fn disagreement_flag_density_proportional_to_total_checks() {
-        // 3 flags out of TOTAL_CHECKS=6 → density == 0.5
+        // 4 flags out of TOTAL_CHECKS=8 → density == 0.5
         let t = make_telemetry("neutral", 0.5, vec![], "medium", 0.5, 0.5);
-        let three_flags: Vec<String> = vec![
+        let four_flags: Vec<String> = vec![
             "emotional_intensity 0.9 is high".into(),
             "structural_tone contains adversarial".into(),
             "urgency_vector 0.8".into(),
+            "coherence_rating 0.2 low".into(),
         ];
-        let score = compute_disagreement_score(&t, &three_flags, None);
+        let score = compute_disagreement_score(&t, &four_flags, None);
         assert!(
             (score.flag_density - 0.5).abs() < 0.01,
-            "3/6 flags must produce density=0.5"
+            "4/8 flags must produce density=0.5"
         );
-        assert_eq!(score.dimension_spread, 3);
+        assert_eq!(score.dimension_spread, 4);
     }
 
     #[test]
@@ -1118,6 +1170,7 @@ mod tests {
             &engine,
             &crate::types::VerifyMode::Deterministic,
             0.1,
+            STOP_AND_ASK_THRESHOLD,
         )
         .await;
         let engine = SequenceEngine::new(vec![]);
@@ -1128,6 +1181,7 @@ mod tests {
             &engine,
             &crate::types::VerifyMode::Deterministic,
             1.0,
+            STOP_AND_ASK_THRESHOLD,
         )
         .await;
         assert!(
@@ -1191,6 +1245,7 @@ mod tests {
             &engine,
             &crate::types::VerifyMode::Reconcile,
             0.1,
+            STOP_AND_ASK_THRESHOLD,
         )
         .await
     }
@@ -1267,6 +1322,7 @@ mod tests {
             &engine,
             &crate::types::VerifyMode::Reconcile,
             0.1,
+            STOP_AND_ASK_THRESHOLD,
         )
         .await;
         assert!(report.disagreement.reconcile_verdict.is_none());
