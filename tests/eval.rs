@@ -16,7 +16,7 @@ use split_brain_harness::{
     backends::InferenceEngine,
     harness::Harness,
     soul,
-    types::{BackendType, Config, VerifyMode},
+    types::{Config, VerifyMode},
 };
 
 // ---------------------------------------------------------------------------
@@ -66,28 +66,10 @@ impl InferenceEngine for MockEngine {
 
 fn make_config() -> Config {
     Config {
-        backend: BackendType::OllamaNative,
-        endpoint: "http://localhost:11434".into(),
         model_name: "test".into(),
-        soul_path: "".into(),
-        api_key: None,
         verify_mode: VerifyMode::None,
         timeout_secs: 30,
-        temperature: 0.1,
-        dump_prompt: false,
-        dump_raw: false,
-        memory_path: None,
-        audit_path: None,
-        serve_key: None,
-        serve_rate_limit: 60,
-        serve_max_body_bytes: 1_048_576,
-        session_log_path: None,
-        context_path: None,
-        arbitrator: split_brain_harness::types::ArbitratorMode::Rules,
-        refine_max_iters: 2,
-        refine_confidence_target: 0.4,
-        stop_and_ask_threshold: 0.4,
-        calibration_path: None,
+        ..Config::default()
     }
 }
 

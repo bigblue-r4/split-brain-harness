@@ -13,25 +13,10 @@ fn make_config(backend: BackendType, api_key: Option<&str>) -> Config {
         backend,
         endpoint: "http://localhost:1".into(), // unreachable — no real calls in these tests
         model_name: "test-model".into(),
-        soul_path: String::new(),
         api_key: api_key.map(String::from),
         verify_mode: VerifyMode::Deterministic,
         timeout_secs: 5,
-        temperature: 0.1,
-        dump_prompt: false,
-        dump_raw: false,
-        memory_path: None,
-        audit_path: None,
-        serve_key: None,
-        serve_rate_limit: 60,
-        serve_max_body_bytes: 1_048_576,
-        session_log_path: None,
-        context_path: None,
-        arbitrator: split_brain_harness::types::ArbitratorMode::Rules,
-        refine_max_iters: 2,
-        refine_confidence_target: 0.4,
-        stop_and_ask_threshold: 0.4,
-        calibration_path: None,
+        ..Config::default()
     }
 }
 

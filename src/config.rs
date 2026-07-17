@@ -266,30 +266,7 @@ mod tests {
     use crate::types::BackendType;
 
     fn base_config() -> Config {
-        Config {
-            backend: BackendType::OllamaNative,
-            endpoint: "http://localhost:11434".into(),
-            model_name: "llama3.2:3b".into(),
-            soul_path: String::new(),
-            api_key: None,
-            verify_mode: VerifyMode::Deterministic,
-            timeout_secs: 120,
-            temperature: 0.1,
-            dump_prompt: false,
-            dump_raw: false,
-            memory_path: None,
-            audit_path: None,
-            serve_key: None,
-            serve_rate_limit: 60,
-            serve_max_body_bytes: 1_048_576,
-            session_log_path: None,
-            context_path: None,
-            arbitrator: ArbitratorMode::Rules,
-            refine_max_iters: 2,
-            refine_confidence_target: 0.4,
-            stop_and_ask_threshold: 0.4,
-            calibration_path: None,
-        }
+        Config::default()
     }
 
     #[test]

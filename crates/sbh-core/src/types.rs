@@ -4,11 +4,12 @@ use serde::{Deserialize, Serialize};
 // Backend selection
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Default)]
 pub enum BackendType {
     #[serde(rename = "openai-compat")]
     OpenAiCompat,
     #[serde(rename = "ollama-native")]
+    #[default]
     OllamaNative,
     #[serde(rename = "local-embedded")]
     LocalEmbedded,
@@ -143,6 +144,38 @@ fn default_refine_max_iters() -> usize {
 
 fn default_stop_and_ask_threshold() -> f32 {
     0.4
+}
+
+impl Default for Config {
+    /// Canonical defaults — the same values `build_config` falls back to when no
+    /// env var or config.toml entry is present. Lets call sites (and tests) write
+    /// `Config { verify_mode: ..., ..Default::default() }` instead of a full literal.
+    fn default() -> Self {
+        Config {
+            backend: BackendType::OllamaNative,
+            endpoint: "http://localhost:11434".into(),
+            model_name: "llama3.2:3b".into(),
+            soul_path: String::new(),
+            api_key: None,
+            verify_mode: VerifyMode::Deterministic,
+            timeout_secs: 120,
+            temperature: default_temperature(),
+            dump_prompt: false,
+            dump_raw: false,
+            memory_path: None,
+            audit_path: None,
+            serve_key: None,
+            serve_rate_limit: 60,
+            serve_max_body_bytes: 1_048_576,
+            session_log_path: None,
+            context_path: None,
+            arbitrator: ArbitratorMode::Rules,
+            refine_max_iters: default_refine_max_iters(),
+            refine_confidence_target: default_stop_and_ask_threshold(),
+            stop_and_ask_threshold: default_stop_and_ask_threshold(),
+            calibration_path: None,
+        }
+    }
 }
 
 impl std::fmt::Display for BackendType {
