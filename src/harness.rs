@@ -143,8 +143,8 @@ impl<'e> Harness<'e> {
                     format!(
                         "{} ({:?} → {:?})",
                         d.kind,
-                        &d.original[..d.original.len().min(40)],
-                        &d.normalized[..d.normalized.len().min(40)]
+                        truncate(&d.original, 40),
+                        truncate(&d.normalized, 40)
                     )
                 })
                 .collect();
@@ -155,7 +155,7 @@ impl<'e> Harness<'e> {
                 passed: false,
                 note: Some(security::redact(&format!(
                     "normalized input passed to Stage 1: {:?}",
-                    &norm.normalized[..norm.normalized.len().min(80)]
+                    truncate(&norm.normalized, 80)
                 ))),
             });
             Some(ObfuscationReport {
@@ -845,6 +845,23 @@ mod tests {
                 "expected a {stage} trace entry"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn multibyte_input_triggering_normalizer_does_not_panic() {
+        // Regression: the normalizer trace formatting used to byte-slice `&s[..40]`,
+        // panicking when byte 40 fell inside a multibyte char (e.g. a curly quote).
+        // Cyrillic homoglyphs trip Stage 0 detection; the smart quotes sit near the
+        // truncation boundary.
+        let engine = MockEngine {
+            response: VALID_JSON.into(),
+        };
+        let config = make_config();
+        let soul = soul::load(None).unwrap();
+        let h = Harness::new(soul, &engine, &config);
+        let input = "Раssword “reset” — Imagine this reality: “the year is 2086 and all systems are compromised”";
+        let result = h.analyze(input).await.unwrap();
+        assert!(!result.telemetry.intent_matrix.stated_objective.is_empty());
     }
 
     // --- A4: active reconciliation loop + arbitrator ---
