@@ -132,6 +132,12 @@ pub struct Config {
     /// Path to the append-only confidence-calibration store (JSONL).
     /// None = calibration features are not logged.
     pub calibration_path: Option<String>,
+    /// Ask the proposer to emit a natural-language `rationale` paragraph.
+    /// Default **false**: the extra generation hurts JSON reliability and latency
+    /// on small local models (the default llama3.2:3b backend). Enable it with a
+    /// capable backend when the explanation is worth the cost.
+    #[serde(default)]
+    pub request_rationale: bool,
 }
 
 fn default_temperature() -> f32 {
@@ -174,6 +180,7 @@ impl Default for Config {
             refine_confidence_target: default_stop_and_ask_threshold(),
             stop_and_ask_threshold: default_stop_and_ask_threshold(),
             calibration_path: None,
+            request_rationale: false,
         }
     }
 }

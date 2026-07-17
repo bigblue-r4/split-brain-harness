@@ -23,6 +23,7 @@ struct FileConfig {
     refine_confidence_target: Option<f32>,
     stop_and_ask_threshold: Option<f32>,
     calibration_path: Option<String>,
+    request_rationale: Option<bool>,
 }
 
 fn load_file_config() -> FileConfig {
@@ -163,6 +164,11 @@ pub fn build_config() -> Config {
         calibration_path: std::env::var("SBH_CALIBRATION_PATH")
             .ok()
             .or(file.calibration_path),
+        request_rationale: std::env::var("SBH_RATIONALE")
+            .ok()
+            .map(|s| matches!(s.trim().to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            .or(file.request_rationale)
+            .unwrap_or(false),
     }
 }
 

@@ -46,19 +46,21 @@ pub async fn analyze(input: &str, config: &Config) -> Result<HarnessResult> {
     let loaded_soul = soul::load(Some(&config.soul_path))?;
     let engine = backends::init_engine(config);
 
+    let policy = transformer::TransformPolicy {
+        request_rationale: config.request_rationale,
+        ..Default::default()
+    };
     let t = if let Some(ref path) = config.context_path {
         let mut corpus = rag::ContextCorpus::embedded();
         match rag::ContextCorpus::load(path) {
             Ok(extra) => corpus.merge(extra),
             Err(e) => eprintln!("warning: could not load context path {path:?}: {e}"),
         }
-        transformer::SplitBrainTransformer::with_corpus(
-            loaded_soul,
-            corpus,
-            transformer::TransformPolicy::default(),
-        )
+        transformer::SplitBrainTransformer::with_corpus(loaded_soul, corpus, policy)
     } else {
-        transformer::SplitBrainTransformer::new(loaded_soul)
+        let mut t = transformer::SplitBrainTransformer::new(loaded_soul);
+        t.policy = policy;
+        t
     };
 
     let h = harness::Harness::new_with_transformer(t, engine.as_ref(), config);

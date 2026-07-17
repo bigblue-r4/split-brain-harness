@@ -23,15 +23,29 @@ pub struct TransformPolicy {
     /// Maximum characters of RAG context injected into the system prompt.
     /// Whole docs are dropped when the budget is exceeded (never split mid-doc).
     pub max_context_chars: usize,
+    /// Ask the proposer to also emit a natural-language `rationale`. Off by
+    /// default — the soul's base schema does not request it, so small local
+    /// models aren't burdened with the extra generation.
+    pub request_rationale: bool,
 }
 
 impl Default for TransformPolicy {
     fn default() -> Self {
         Self {
             max_context_chars: 6000,
+            request_rationale: false,
         }
     }
 }
+
+/// Appended to the system prompt when `request_rationale` is on. Kept out of the
+/// base soul schema so the default (small-model) path never generates it.
+const RATIONALE_INSTRUCTION: &str = "\n\n--- OPTIONAL RATIONALE ---\n\
+Also include a top-level \"rationale\" field alongside the telemetry objects (a \
+sibling, never inside them): a single short paragraph (<= 60 words, plain \
+language) explaining WHY you assigned this telemetry — the specific input signals \
+behind the manipulation_risk, emotion, and urgency reads.\n\
+--- END OPTIONAL RATIONALE ---";
 
 /// Assembles system prompts and payloads for the split-brain inference pipeline.
 pub struct SplitBrainTransformer {
@@ -67,6 +81,11 @@ impl SplitBrainTransformer {
     ///   3. Trigger-matched context packs (only when input matched threat signals)
     pub fn transform_system(&self, trigger_packs: &[&'static ContextPack]) -> String {
         let mut buf = self.soul.logic_system_prompt.clone();
+
+        // Opt-in rationale request, placed next to the schema (not in the base soul).
+        if self.policy.request_rationale {
+            buf.push_str(RATIONALE_INSTRUCTION);
+        }
 
         // RAG context injection
         let rendered = self.corpus.render(self.policy.max_context_chars);
@@ -134,6 +153,17 @@ mod tests {
     }
 
     #[test]
+    fn rationale_is_opt_in() {
+        // Default: no rationale request (small-model friendly).
+        let t = make_transformer();
+        assert!(!t.transform_system(&[]).to_lowercase().contains("rationale"));
+        // Opt-in: the instruction is injected.
+        let mut t2 = make_transformer();
+        t2.policy.request_rationale = true;
+        assert!(t2.transform_system(&[]).contains("\"rationale\" field"));
+    }
+
+    #[test]
     fn transform_system_injects_rag_context() {
         let t = make_transformer();
         let system = t.transform_system(&[]);
@@ -197,6 +227,7 @@ mod tests {
         let soul = soul::load(None).unwrap();
         let policy = TransformPolicy {
             max_context_chars: 100,
+            ..Default::default()
         };
         let t = SplitBrainTransformer::with_corpus(soul, ContextCorpus::embedded(), policy);
         let system = t.transform_system(&[]);
