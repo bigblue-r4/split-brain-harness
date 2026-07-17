@@ -12,7 +12,9 @@ pub mod extractor;
 pub mod generative_forge;
 pub mod harness;
 pub mod input_validation;
-pub mod normalizer;
+// v2: extracted to the sbh-normalize crate; re-exported so `crate::normalizer`
+// and `split_brain_harness::normalizer` keep resolving unchanged.
+pub use sbh_normalize as normalizer;
 pub mod policy;
 pub mod rag;
 pub mod regenerative_forge;
