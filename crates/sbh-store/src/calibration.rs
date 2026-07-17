@@ -12,7 +12,7 @@
 //! `session_log.rs`).
 
 use crate::audit::{fingerprint, iso_now};
-use crate::types::VerificationReport;
+use sbh_core::types::VerificationReport;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Write;

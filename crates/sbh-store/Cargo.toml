@@ -1,0 +1,18 @@
+[package]
+name        = "sbh-store"
+version     = "0.1.0"
+edition     = "2021"
+description = "Append-only JSONL stores for the Split-Brain Harness: forge audit log, serve session/escalation log, and the confidence-calibration store. Includes the shared FNV fingerprint + ISO-8601 helpers."
+license     = "MIT"
+
+[lib]
+name = "sbh_store"
+path = "src/lib.rs"
+
+[dependencies]
+serde      = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sbh-core   = { path = "../sbh-core" }
+
+[dev-dependencies]
+tempfile = "3"

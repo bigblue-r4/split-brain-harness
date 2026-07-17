@@ -1282,6 +1282,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "sbh-store"
+version = "0.1.0"
+dependencies = [
+ "sbh-core",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "schannel"
 version = "0.1.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1473,6 +1483,7 @@ dependencies = [
  "reqwest",
  "sbh-core",
  "sbh-normalize",
+ "sbh-store",
  "serde",
  "serde_json",
  "tempfile",

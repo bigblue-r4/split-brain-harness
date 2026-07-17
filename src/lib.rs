@@ -3,11 +3,13 @@
 // `split_brain_harness::*` paths keep resolving unchanged.
 pub use sbh_core::{capability, extractor, input_validation, types};
 
+// v2: append-only JSONL stores extracted to sbh-store; re-exported so
+// `crate::{audit,session_log,calibration}` paths resolve unchanged.
+pub use sbh_store::{audit, calibration, session_log};
+
 pub mod adaptor;
 pub mod arbitrator;
-pub mod audit;
 pub mod backends;
-pub mod calibration;
 pub mod code_gen;
 pub mod config;
 pub use config::validate_config;
@@ -24,7 +26,6 @@ pub mod reputation;
 pub mod security;
 #[cfg(feature = "serve")]
 pub mod serve;
-pub mod session_log;
 pub mod soul;
 pub mod static_analysis;
 pub mod tool_forge;
