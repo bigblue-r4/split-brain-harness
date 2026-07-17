@@ -21,6 +21,32 @@ pub struct Harness<'e> {
     config: &'e Config,
 }
 
+/// Mutable state threaded through the analysis pipeline stages.
+struct PipelineCtx {
+    input: String,
+    effective_input: String,
+    obfuscation: Option<ObfuscationReport>,
+    trace: Vec<TraceEntry>,
+    telemetry: Option<TelemetryResult>,
+    capability_request: Option<CapabilityRequest>,
+    verification: Option<VerificationReport>,
+    refinement: Option<RefinementTrace>,
+    /// Set when the proposer returned non-JSON: the reconcile stage installed a
+    /// safe fallback, so the obfuscation/calibration stages are skipped.
+    short_circuit: bool,
+}
+
+/// Record a stage's wall-clock duration into the trace (feeds observability, B).
+fn push_timing(trace: &mut Vec<TraceEntry>, name: &str, dur: std::time::Duration) {
+    trace.push(TraceEntry {
+        stage: format!("timing:{name}"),
+        claim: format!("{} µs", dur.as_micros()),
+        evidence: None,
+        passed: true,
+        note: None,
+    });
+}
+
 impl<'e> Harness<'e> {
     /// Create with embedded default corpus and default transform policy.
     pub fn new(soul: Soul, engine: &'e dyn InferenceEngine, config: &'e Config) -> Self {
@@ -54,11 +80,60 @@ impl<'e> Harness<'e> {
         input_validation::validate_harness_input(input)
             .map_err(|e| anyhow!("input validation failed: {e}"))?;
 
-        let mut trace: Vec<TraceEntry> = vec![];
+        let mut ctx = PipelineCtx {
+            input: input.to_string(),
+            effective_input: input.to_string(),
+            obfuscation: None,
+            trace: vec![],
+            telemetry: None,
+            capability_request: None,
+            verification: None,
+            refinement: None,
+            short_circuit: false,
+        };
 
-        // Stage 0: normalizer — deobfuscate before handing to the LLM
-        let norm = normalizer::run(input);
-        let obfuscation_report = if norm.detections.is_empty() {
+        // Stage pipeline: Normalize -> Reconcile(propose/verify/arbitrate loop)
+        // -> Obfuscation -> Calibrate. Each stage is timed into the trace.
+        // Obfuscation and Calibration are skipped on the fallback short-circuit
+        // (a non-JSON proposer response), preserving pre-pipeline behavior.
+        // Reserved insertion points: Advocate (E) and Formal (F) live inside the
+        // reconcile loop; tool-aware telemetry (C) attaches at propose. See ARCHITECTURE.md.
+        let t = std::time::Instant::now();
+        self.stage_normalize(&mut ctx);
+        push_timing(&mut ctx.trace, "normalize", t.elapsed());
+
+        let t = std::time::Instant::now();
+        self.stage_reconcile(&mut ctx).await?;
+        push_timing(&mut ctx.trace, "reconcile", t.elapsed());
+
+        if !ctx.short_circuit {
+            let t = std::time::Instant::now();
+            self.stage_obfuscation(&mut ctx);
+            push_timing(&mut ctx.trace, "obfuscation", t.elapsed());
+
+            let t = std::time::Instant::now();
+            self.stage_calibration(&mut ctx);
+            push_timing(&mut ctx.trace, "calibration", t.elapsed());
+        }
+
+        Ok(HarnessResult {
+            telemetry: ctx
+                .telemetry
+                .expect("reconcile stage always sets telemetry"),
+            verification: ctx
+                .verification
+                .expect("reconcile stage always sets verification"),
+            trace: ctx.trace,
+            capability_request: ctx.capability_request,
+            obfuscation: ctx.obfuscation,
+            refinement: ctx.refinement,
+        })
+    }
+
+    /// Stage 0 — deobfuscate the input and record any obfuscation report.
+    fn stage_normalize(&self, ctx: &mut PipelineCtx) {
+        let norm = normalizer::run(&ctx.input);
+        ctx.obfuscation = if norm.detections.is_empty() {
             None
         } else {
             let det_strings: Vec<String> = norm
@@ -73,7 +148,7 @@ impl<'e> Harness<'e> {
                     )
                 })
                 .collect();
-            trace.push(TraceEntry {
+            ctx.trace.push(TraceEntry {
                 stage: "normalizer".into(),
                 claim: normalizer::summary(&norm),
                 evidence: Some(security::redact(&det_strings.join("; "))),
@@ -89,19 +164,19 @@ impl<'e> Harness<'e> {
                 normalized_input: norm.normalized.clone(),
             })
         };
-
-        // Use deobfuscated text for Stage 1 so the LLM sees the real intent
-        let effective_input = if norm.detections.is_empty() {
-            input
+        // Deobfuscated text feeds Stage 1 so the LLM sees the real intent.
+        ctx.effective_input = if norm.detections.is_empty() {
+            ctx.input.clone()
         } else {
-            &norm.normalized
+            norm.normalized
         };
+    }
 
-        // ---- Stage 1+2 with active reconciliation (v1.5) ----
-        // Rules arbitrator: propose→verify up to refine_max_iters, feeding the
-        // verifier's flags back into a revision when the hemispheres disagree.
-        // arbitrator=off (or a 1-iteration budget) restores the one-shot path with
-        // refinement=None and byte-identical output.
+    /// Stage 1+2 — active reconciliation: propose -> verify -> arbitrate, up to
+    /// refine_max_iters, feeding verifier flags back on disagreement. A non-JSON
+    /// proposer response installs a safe fallback and short-circuits the pipeline.
+    async fn stage_reconcile(&self, ctx: &mut PipelineCtx) -> Result<()> {
+        let effective_input = ctx.effective_input.clone();
         let do_refine = matches!(self.config.arbitrator, ArbitratorMode::Rules)
             && self.config.refine_max_iters > 1;
         let max_iters = if do_refine { self.config.refine_max_iters } else { 1 };
@@ -114,10 +189,12 @@ impl<'e> Harness<'e> {
 
         for i in 0..max_iters {
             let (telemetry, capability_request, propose_entries, is_fallback) =
-                self.run_propose(effective_input, feedback.as_deref()).await?;
-            trace.extend(propose_entries);
+                self.run_propose(&effective_input, feedback.as_deref()).await?;
+            ctx.trace.extend(propose_entries);
 
-            // Non-JSON / refusal: safe fallback, short-circuit (unchanged behavior).
+            // Reserved: Advocate stage (E) runs here, between propose and verify,
+            // on high-stakes inputs.
+
             if is_fallback {
                 let verification = VerificationReport {
                     passed: false,
@@ -125,24 +202,23 @@ impl<'e> Harness<'e> {
                     unsupported_claims: vec![],
                     assumptions: vec![],
                     unresolved: vec![
-                        "model returned non-JSON — parse failure (see trace for raw output)".into(),
+                        "model returned non-JSON — parse failure (see trace for raw output)"
+                            .into(),
                     ],
                     confidence: 0.0,
                     disagreement: Default::default(),
                     stop_and_ask: true,
                 };
-                return Ok(HarnessResult {
-                    telemetry,
-                    verification,
-                    trace,
-                    capability_request: None,
-                    obfuscation: obfuscation_report,
-                    refinement: None,
-                });
+                ctx.telemetry = Some(telemetry);
+                ctx.verification = Some(verification);
+                ctx.capability_request = None;
+                ctx.refinement = None;
+                ctx.short_circuit = true;
+                return Ok(());
             }
 
             let (verification, verify_traces) = verifier::verify(
-                effective_input,
+                &effective_input,
                 &telemetry,
                 &self.transformer.soul,
                 self.engine,
@@ -151,7 +227,10 @@ impl<'e> Harness<'e> {
                 self.config.stop_and_ask_threshold,
             )
             .await;
-            trace.extend(verify_traces);
+            ctx.trace.extend(verify_traces);
+
+            // Reserved: Formal stage (F) runs here, after verify, for
+            // critical-domain predicate checks.
 
             iter_summaries.push(RefinementIteration {
                 iteration: i,
@@ -167,7 +246,7 @@ impl<'e> Harness<'e> {
             }
 
             let decision = arbitrator::decide(&iter_summaries, target, max_iters);
-            trace.push(TraceEntry {
+            ctx.trace.push(TraceEntry {
                 stage: format!("arbitrator (iter {i})"),
                 claim: format!("{}: {}", decision.verdict, decision.reasoning),
                 evidence: None,
@@ -178,7 +257,7 @@ impl<'e> Harness<'e> {
             if decision.verdict == ArbiterVerdict::ReRefine && i + 1 < max_iters {
                 let (prior_t, _, prior_v) = &results[i];
                 feedback = Some(build_refine_feedback(prior_t, prior_v));
-                trace.push(TraceEntry {
+                ctx.trace.push(TraceEntry {
                     stage: format!("refine (iter {i})"),
                     claim: "re-proposing with verifier feedback".into(),
                     evidence: None,
@@ -215,54 +294,61 @@ impl<'e> Harness<'e> {
             verification.stop_and_ask = true;
         }
 
-        // If obfuscation was detected, force verification to fail and surface it
-        if let Some(ref obs) = obfuscation_report {
-            if obs.score >= 0.25 {
-                verification.passed = false;
-                verification.consistency_flags.insert(
-                    0,
-                    format!(
-                        "obfuscation detected (score {:.2}): {} — input was deobfuscated before analysis",
-                        obs.score,
-                        obs.detections.join(", ")
-                    ),
-                );
-                if obs.score >= 0.60 {
-                    verification.stop_and_ask = true;
-                    verification.confidence = (verification.confidence * 0.5).min(0.3);
-                }
+        ctx.telemetry = Some(telemetry);
+        ctx.capability_request = capability_request;
+        ctx.verification = Some(verification);
+        ctx.refinement = refinement;
+        Ok(())
+    }
+
+    /// Post-verify: if obfuscation was detected, force the result to fail and surface it.
+    fn stage_obfuscation(&self, ctx: &mut PipelineCtx) {
+        let (Some(verification), Some(obs)) =
+            (ctx.verification.as_mut(), ctx.obfuscation.as_ref())
+        else {
+            return;
+        };
+        if obs.score >= 0.25 {
+            verification.passed = false;
+            verification.consistency_flags.insert(
+                0,
+                format!(
+                    "obfuscation detected (score {:.2}): {} — input was deobfuscated before analysis",
+                    obs.score,
+                    obs.detections.join(", ")
+                ),
+            );
+            if obs.score >= 0.60 {
+                verification.stop_and_ask = true;
+                verification.confidence = (verification.confidence * 0.5).min(0.3);
             }
         }
+    }
 
-        // Confidence calibration (A5). When enabled, log the raw features for
-        // future fitting, then — only if a fitted model exists — recalibrate the
-        // reported confidence and its gate. With no params file this is a no-op.
-        if let Some(ref cal_path) = self.config.calibration_path {
-            let entry = crate::calibration::entry_from(input, &verification);
-            let _ = crate::calibration::append(cal_path, &entry);
-            if let Some(params) = crate::calibration::load_params(cal_path) {
-                let calibrated = crate::calibration::apply(&params, verification.confidence);
-                verification.confidence = calibrated;
-                verification.stop_and_ask = calibrated < self.config.stop_and_ask_threshold
-                    || verification.consistency_flags.len() >= 3;
-                trace.push(TraceEntry {
-                    stage: "calibration".into(),
-                    claim: format!("confidence recalibrated to {calibrated:.2} (Platt)"),
-                    evidence: None,
-                    passed: true,
-                    note: None,
-                });
-            }
+    /// Confidence calibration (A5): log raw features, and apply a fitted Platt
+    /// model if present (otherwise a no-op).
+    fn stage_calibration(&self, ctx: &mut PipelineCtx) {
+        let Some(cal_path) = self.config.calibration_path.as_ref() else {
+            return;
+        };
+        let Some(verification) = ctx.verification.as_mut() else {
+            return;
+        };
+        let entry = crate::calibration::entry_from(&ctx.input, verification);
+        let _ = crate::calibration::append(cal_path, &entry);
+        if let Some(params) = crate::calibration::load_params(cal_path) {
+            let calibrated = crate::calibration::apply(&params, verification.confidence);
+            verification.confidence = calibrated;
+            verification.stop_and_ask = calibrated < self.config.stop_and_ask_threshold
+                || verification.consistency_flags.len() >= 3;
+            ctx.trace.push(TraceEntry {
+                stage: "calibration".into(),
+                claim: format!("confidence recalibrated to {calibrated:.2} (Platt)"),
+                evidence: None,
+                passed: true,
+                note: None,
+            });
         }
-
-        Ok(HarnessResult {
-            telemetry,
-            verification,
-            trace,
-            capability_request,
-            obfuscation: obfuscation_report,
-            refinement,
-        })
     }
 
     // -----------------------------------------------------------------------
@@ -757,6 +843,26 @@ mod tests {
             "unknown"
         );
         assert!(!result.trace.iter().any(|e| e.stage == "fallback"));
+    }
+
+    // --- P3: stage pipeline ---
+
+    #[tokio::test]
+    async fn pipeline_emits_per_stage_timings() {
+        let engine = MockEngine {
+            response: VALID_JSON.into(),
+        };
+        let config = make_config();
+        let soul = soul::load(None).unwrap();
+        let h = Harness::new(soul, &engine, &config);
+        let result = h.analyze("write me a poem").await.unwrap();
+        // Each pipeline stage records a timing trace entry (feeds observability).
+        for stage in ["timing:normalize", "timing:reconcile", "timing:obfuscation"] {
+            assert!(
+                result.trace.iter().any(|e| e.stage == stage),
+                "expected a {stage} trace entry"
+            );
+        }
     }
 
     // --- A4: active reconciliation loop + arbitrator ---
