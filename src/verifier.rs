@@ -2,7 +2,7 @@ use crate::backends::InferenceEngine;
 use crate::extractor;
 use crate::soul;
 use crate::types::{
-    DisagreementScore, Soul, TelemetryResult, TraceEntry, VerificationReport, VerifyMode,
+    DisagreementScore, Risk, Soul, TelemetryResult, TraceEntry, VerificationReport, VerifyMode,
 };
 use serde::Deserialize;
 
@@ -250,7 +250,7 @@ pub fn compute_disagreement_score(
     // a low-risk assertion — the two manipulation-evasion signals together.
     let injection_fingerprint = tone_fired
         && urgency_fired
-        && telemetry.intent_matrix.manipulation_risk.to_lowercase() == "low";
+        && telemetry.intent_matrix.manipulation_risk == Risk::Low;
 
     // Structure-aware confidence (DiscoUQ-inspired):
     //   - base: coherence_rating (proposer's own self-assessment of input quality)
@@ -370,7 +370,7 @@ fn check_consistency(t: &TelemetryResult) -> (Vec<CheckOutcome>, Vec<TraceEntry>
             Box::new(|t| {
                 let hostile = ["anger", "fear", "contempt", "hostility"];
                 if t.affective_telemetry.emotional_intensity >= 0.7
-                    && t.intent_matrix.manipulation_risk == "low"
+                    && t.intent_matrix.manipulation_risk == Risk::Low
                     && hostile.contains(
                         &t.affective_telemetry
                             .primary_emotion
@@ -401,7 +401,7 @@ fn check_consistency(t: &TelemetryResult) -> (Vec<CheckOutcome>, Vec<TraceEntry>
                     .filter(|s| adversarial.contains(&s.to_lowercase().as_str()))
                     .map(|s| s.as_str())
                     .collect();
-                if !found.is_empty() && t.intent_matrix.manipulation_risk == "low" {
+                if !found.is_empty() && t.intent_matrix.manipulation_risk == Risk::Low {
                     Some(format!(
                         "structural_tone {:?} conflicts with manipulation_risk=low",
                         found
@@ -417,7 +417,7 @@ fn check_consistency(t: &TelemetryResult) -> (Vec<CheckOutcome>, Vec<TraceEntry>
             2.0,
             Box::new(|t| {
                 if t.cognitive_state.urgency_vector >= 0.7
-                    && t.intent_matrix.manipulation_risk == "low"
+                    && t.intent_matrix.manipulation_risk == Risk::Low
                 {
                     Some(format!(
                         "high urgency_vector ({:.2}) with manipulation_risk=low — urgency may be manufactured",
@@ -448,12 +448,10 @@ fn check_consistency(t: &TelemetryResult) -> (Vec<CheckOutcome>, Vec<TraceEntry>
             Dimension::RiskValue,
             1.0,
             Box::new(|t| {
-                const VALID: &[&str] = &["low", "medium", "high"];
-                let risk = t.intent_matrix.manipulation_risk.to_lowercase();
-                if !VALID.contains(&risk.as_str()) {
+                if !t.intent_matrix.manipulation_risk.is_recognized() {
                     Some(format!(
                         "manipulation_risk {:?} is not a recognized value (expected: low, medium, high) — treating as unknown",
-                        t.intent_matrix.manipulation_risk
+                        t.intent_matrix.manipulation_risk.as_str()
                     ))
                 } else {
                     None
@@ -484,7 +482,7 @@ fn check_consistency(t: &TelemetryResult) -> (Vec<CheckOutcome>, Vec<TraceEntry>
                     .structural_tone
                     .iter()
                     .any(|s| coercive_tones.contains(&s.to_lowercase().as_str()));
-                if t.intent_matrix.manipulation_risk == "high"
+                if t.intent_matrix.manipulation_risk == Risk::High
                     && t.cognitive_state.urgency_vector < 0.4
                     && !has_coercive_tone
                 {

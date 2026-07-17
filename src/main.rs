@@ -1066,17 +1066,17 @@ async fn cmd_bench(
         match analyze(&text, config).await {
             Ok(result) => {
                 let elapsed = t0.elapsed().as_secs_f32();
-                let risk = &result.telemetry.intent_matrix.manipulation_risk;
+                let risk = result.telemetry.intent_matrix.manipulation_risk.as_str();
                 let status = bench_status(risk, baseline_risk);
                 let flags = &result.verification.consistency_flags;
 
-                match risk.as_str() {
+                match risk {
                     "low" => n_low += 1,
                     "medium" => n_med += 1,
                     _ => n_high += 1,
                 }
 
-                let risk_col = match risk.as_str() {
+                let risk_col = match risk {
                     "high" => red,
                     "medium" => yellow,
                     _ => green,
@@ -1415,7 +1415,7 @@ fn demo_print_result(
     }
     let t = &result.telemetry;
     let v = &result.verification;
-    let risk = &t.intent_matrix.manipulation_risk;
+    let risk = t.intent_matrix.manipulation_risk.as_str();
     let (col, rst) = demo_color(risk, no_color);
     let verdict = match (v.passed, no_color) {
         (true, true) => "✓ passed",
@@ -1463,7 +1463,7 @@ fn demo_print_summary(cases: &[&DemoCase], results: &[HarnessResult], no_color: 
     let mut n_flagged = 0u32;
 
     for (i, (case, result)) in cases.iter().zip(results.iter()).enumerate() {
-        let risk = &result.telemetry.intent_matrix.manipulation_risk;
+        let risk = result.telemetry.intent_matrix.manipulation_risk.as_str();
         let (col, rst) = demo_color(risk, no_color);
         let verdict = if result.verification.passed {
             "✓ passed"
@@ -1481,7 +1481,7 @@ fn demo_print_summary(cases: &[&DemoCase], results: &[HarnessResult], no_color: 
             label,
             risk
         );
-        match risk.as_ref() {
+        match risk {
             "high" => n_high += 1,
             "medium" => n_med += 1,
             _ => n_low += 1,
@@ -1696,7 +1696,7 @@ fn demo_export_markdown(
     let mut n_passed = 0u32;
 
     for (i, (case, result)) in cases.iter().zip(results.iter()).enumerate() {
-        let risk = &result.telemetry.intent_matrix.manipulation_risk;
+        let risk = result.telemetry.intent_matrix.manipulation_risk.as_str();
         let intensity = result.telemetry.affective_telemetry.emotional_intensity;
         let urgency = result.telemetry.cognitive_state.urgency_vector;
         let verdict = if result.verification.passed {
@@ -1704,7 +1704,7 @@ fn demo_export_markdown(
         } else {
             "✗ flagged"
         };
-        match risk.as_str() {
+        match risk {
             "high" => n_high += 1,
             "medium" => n_med += 1,
             _ => n_low += 1,
@@ -2018,7 +2018,7 @@ async fn cmd_demo_serve(
             }
         };
 
-        let risk = &result.telemetry.intent_matrix.manipulation_risk;
+        let risk = result.telemetry.intent_matrix.manipulation_risk.as_str();
         let score = serve_risk_score(risk);
         scores.push(score);
 
@@ -2202,7 +2202,7 @@ fn demo_serve_export_markdown(
 
     for (i, (case, result)) in DEMO_SERVE_CASES.iter().zip(results.iter()).enumerate() {
         let turn = i + 1;
-        let risk = &result.telemetry.intent_matrix.manipulation_risk;
+        let risk = result.telemetry.intent_matrix.manipulation_risk.as_str();
         let intensity = result.telemetry.affective_telemetry.emotional_intensity;
         let urgency = result.telemetry.cognitive_state.urgency_vector;
         let alert = if escalation_turn == Some(turn) {

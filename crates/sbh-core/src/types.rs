@@ -191,12 +191,72 @@ pub struct AfferentTelemetry {
     pub structural_tone: Vec<String>,
 }
 
+/// Coercion risk directed at the AI system. Typed, but **tolerant on the parse
+/// boundary**: the model must emit "low" | "medium" | "high", yet any other value
+/// deserializes to `Unknown(raw)` instead of failing the whole parse — preserving
+/// the raw string so the `manipulation-risk-value` check can flag it. Serializes
+/// back to the same lowercase strings (round-trip preserved), so downstream
+/// consumers that read `manipulation_risk` see no change.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Risk {
+    Low,
+    Medium,
+    High,
+    Unknown(String),
+}
+
+impl Risk {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Risk::Low => "low",
+            Risk::Medium => "medium",
+            Risk::High => "high",
+            Risk::Unknown(s) => s,
+        }
+    }
+    /// True unless the model emitted an unrecognized risk value.
+    pub fn is_recognized(&self) -> bool {
+        !matches!(self, Risk::Unknown(_))
+    }
+}
+
+impl From<&str> for Risk {
+    fn from(s: &str) -> Self {
+        match s.trim().to_lowercase().as_str() {
+            "low" => Risk::Low,
+            "medium" => Risk::Medium,
+            "high" => Risk::High,
+            _ => Risk::Unknown(s.to_string()),
+        }
+    }
+}
+impl From<String> for Risk {
+    fn from(s: String) -> Self {
+        Risk::from(s.as_str())
+    }
+}
+impl std::fmt::Display for Risk {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl Serialize for Risk {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.as_str())
+    }
+}
+impl<'de> Deserialize<'de> for Risk {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(Risk::from(String::deserialize(d)?))
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct IntentMatrix {
     pub stated_objective: String,
     pub subtextual_motive: String,
-    pub manipulation_risk: String,
+    pub manipulation_risk: Risk,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -358,4 +418,41 @@ pub struct HarnessResult {
     /// Absent (skipped) when arbitrator = off or only a single pass ran.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub refinement: Option<RefinementTrace>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn risk_parses_canonical_values_case_insensitively() {
+        assert_eq!(Risk::from("low"), Risk::Low);
+        assert_eq!(Risk::from("HIGH"), Risk::High);
+        assert_eq!(Risk::from("  Medium "), Risk::Medium);
+    }
+
+    #[test]
+    fn risk_captures_unknown_values_instead_of_failing() {
+        let r = Risk::from("banana");
+        assert_eq!(r, Risk::Unknown("banana".into()));
+        assert!(!r.is_recognized());
+        assert!(Risk::Low.is_recognized());
+    }
+
+    #[test]
+    fn risk_deserialize_is_tolerant_and_round_trips() {
+        // A bad value must NOT fail the whole telemetry parse.
+        let r: Risk = serde_json::from_str("\"weird\"").unwrap();
+        assert_eq!(r, Risk::Unknown("weird".into()));
+        // Canonical values serialize back to the same lowercase strings.
+        assert_eq!(serde_json::to_string(&Risk::High).unwrap(), "\"high\"");
+        assert_eq!(serde_json::to_string(&r).unwrap(), "\"weird\"");
+    }
+
+    #[test]
+    fn intent_matrix_tolerates_unknown_risk() {
+        let json = r#"{"stated_objective":"o","subtextual_motive":"m","manipulation_risk":"nope"}"#;
+        let im: IntentMatrix = serde_json::from_str(json).unwrap();
+        assert_eq!(im.manipulation_risk, Risk::Unknown("nope".into()));
+    }
 }

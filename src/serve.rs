@@ -599,7 +599,7 @@ async fn chat_completions(
         let hist = sessions
             .entry(session_id.clone())
             .or_insert_with(SessionHistory::new);
-        hist.push(&result.telemetry.intent_matrix.manipulation_risk);
+        hist.push(result.telemetry.intent_matrix.manipulation_risk.as_str());
         let escalating = hist.is_escalating();
         let summary = if escalating {
             Some(hist.risk_summary())

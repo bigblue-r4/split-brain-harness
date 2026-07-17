@@ -9,7 +9,7 @@
 /// This makes the prompt construction testable, reproducible, and independent of the
 /// inference backend. Any backend (Ollama, Anthropic, OpenAI-compat, future embedded)
 /// uses the same transformer output.
-use crate::capability::ModelProposalOutput;
+use crate::capability::ModelContract;
 use crate::context_packs::ContextPack;
 use crate::extractor;
 use crate::rag::ContextCorpus;
@@ -103,8 +103,8 @@ impl SplitBrainTransformer {
         soul::wrap_payload(input)
     }
 
-    /// Parse raw model output into a `ModelProposalOutput` (telemetry + optional capability request).
-    pub fn postprocess(&self, raw: &str) -> Result<ModelProposalOutput> {
+    /// Parse raw model output into a `ModelContract` (telemetry + optional capability request).
+    pub fn postprocess(&self, raw: &str) -> Result<ModelContract> {
         extractor::extract(raw).map_err(|e| anyhow::anyhow!("postprocess failed: {e}"))
     }
 }

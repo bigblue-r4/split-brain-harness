@@ -162,7 +162,8 @@ async fn fixture_pipeline_with_mock_engine() {
         }
 
         assert_eq!(
-            result.telemetry.intent_matrix.manipulation_risk, f.expect_manipulation_risk,
+            result.telemetry.intent_matrix.manipulation_risk.as_str(),
+            f.expect_manipulation_risk.as_str(),
             "fixture '{}': manipulation_risk mismatch",
             f.name
         );
