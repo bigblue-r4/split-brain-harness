@@ -1275,6 +1275,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "sbh-llm"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "reqwest",
+ "sbh-core",
+ "serde_json",
+]
+
+[[package]]
 name = "sbh-normalize"
 version = "0.1.0"
 dependencies = [
@@ -1482,6 +1492,7 @@ dependencies = [
  "ratatui",
  "reqwest",
  "sbh-core",
+ "sbh-llm",
  "sbh-normalize",
  "sbh-store",
  "serde",

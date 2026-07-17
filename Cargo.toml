@@ -34,6 +34,7 @@ base64       = "0.22"
 sbh-normalize = { path = "crates/sbh-normalize" }
 sbh-core      = { path = "crates/sbh-core" }
 sbh-store     = { path = "crates/sbh-store" }
+sbh-llm       = { path = "crates/sbh-llm" }
 axum         = { version = "0.7", features = ["json"], optional = true }
 axum-server  = { version = "0.7", features = ["tls-rustls"], optional = true }
 ratatui      = { version = "0.29", optional = true }

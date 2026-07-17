@@ -7,9 +7,12 @@ pub use sbh_core::{capability, extractor, input_validation, types};
 // `crate::{audit,session_log,calibration}` paths resolve unchanged.
 pub use sbh_store::{audit, calibration, session_log};
 
+// v2: LLM backends extracted to sbh-llm; re-exported so `crate::backends` and
+// `split_brain_harness::backends` resolve unchanged.
+pub use sbh_llm as backends;
+
 pub mod adaptor;
 pub mod arbitrator;
-pub mod backends;
 pub mod code_gen;
 pub mod config;
 pub use config::validate_config;
