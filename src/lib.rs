@@ -1,17 +1,19 @@
+// v2 clean-core: the foundational typed model lives in sbh-core; re-exported so
+// `crate::{types,capability,input_validation,extractor}` and the
+// `split_brain_harness::*` paths keep resolving unchanged.
+pub use sbh_core::{capability, extractor, input_validation, types};
+
 pub mod adaptor;
 pub mod arbitrator;
 pub mod audit;
 pub mod backends;
 pub mod calibration;
-pub mod capability;
 pub mod code_gen;
 pub mod config;
 pub use config::validate_config;
 pub mod context_packs;
-pub mod extractor;
 pub mod generative_forge;
 pub mod harness;
-pub mod input_validation;
 // v2: extracted to the sbh-normalize crate; re-exported so `crate::normalizer`
 // and `split_brain_harness::normalizer` keep resolving unchanged.
 pub use sbh_normalize as normalizer;
@@ -28,7 +30,6 @@ pub mod static_analysis;
 pub mod tool_forge;
 pub mod tool_memory;
 pub mod transformer;
-pub mod types;
 pub mod verifier;
 pub mod wasm_forge;
 
