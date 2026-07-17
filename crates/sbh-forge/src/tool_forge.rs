@@ -13,11 +13,11 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use crate::capability::{
+use sbh_core::capability::{
     Budget, CapabilityMemoryRecord, CapabilityRequest, ToolMetrics, ToolRunReport,
 };
-use crate::input_validation;
-use crate::policy::{self, PolicyState};
+use sbh_core::input_validation;
+use sbh_safety::policy::{self, PolicyState};
 use crate::tool_memory::CapabilityMemory;
 
 /// Signature for a mock tool implementation.
@@ -304,7 +304,7 @@ fn mock_json_extract(input: &str, _req: &CapabilityRequest) -> Result<String, St
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capability::CapabilityConstraints;
+    use sbh_core::capability::CapabilityConstraints;
 
     fn clean_req(capability: &str) -> CapabilityRequest {
         CapabilityRequest {
@@ -449,7 +449,7 @@ mod tests {
     #[test]
     fn forge_rejects_oversized_input() {
         let mut forge = Forge::new();
-        let big = "x".repeat(crate::input_validation::MAX_FORGE_INPUT_BYTES + 1);
+        let big = "x".repeat(sbh_core::input_validation::MAX_FORGE_INPUT_BYTES + 1);
         let report = forge.handle(&clean_req("word_count"), &big);
         assert!(!report.accepted);
         assert!(report.rejection_reasons[0].contains("input validation"));
@@ -467,7 +467,7 @@ mod tests {
     fn forge_rejects_oversized_capability_name() {
         let mut forge = Forge::new();
         let mut req = clean_req("word_count");
-        req.capability = "x".repeat(crate::input_validation::MAX_CAPABILITY_NAME_BYTES + 1);
+        req.capability = "x".repeat(sbh_core::input_validation::MAX_CAPABILITY_NAME_BYTES + 1);
         let report = forge.handle(&req, "hello");
         assert!(!report.accepted);
         assert!(report.rejection_reasons[0].contains("capability field validation"));

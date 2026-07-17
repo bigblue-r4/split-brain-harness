@@ -1275,6 +1275,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "sbh-forge"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "sbh-core",
+ "sbh-llm",
+ "sbh-safety",
+ "sbh-store",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "sbh-llm"
 version = "0.1.0"
 dependencies = [
@@ -1501,6 +1517,7 @@ dependencies = [
  "ratatui",
  "reqwest",
  "sbh-core",
+ "sbh-forge",
  "sbh-llm",
  "sbh-normalize",
  "sbh-safety",

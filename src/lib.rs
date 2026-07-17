@@ -15,28 +15,27 @@ pub use sbh_llm as backends;
 // `crate::{soul,security,policy}` paths resolve unchanged.
 pub use sbh_safety::{policy, security, soul};
 
+// v2: the Ephemeral Tool Forge extracted to sbh-forge; re-exported so
+// `crate::{tool_forge,tool_memory,...}` and `split_brain_harness::*` resolve unchanged.
+pub use sbh_forge::{
+    code_gen, generative_forge, regenerative_forge, reputation, static_analysis, tool_forge,
+    tool_memory, wasm_forge,
+};
+
 pub mod adaptor;
 pub mod arbitrator;
-pub mod code_gen;
 pub mod config;
 pub use config::validate_config;
 pub mod context_packs;
-pub mod generative_forge;
 pub mod harness;
 // v2: extracted to the sbh-normalize crate; re-exported so `crate::normalizer`
 // and `split_brain_harness::normalizer` keep resolving unchanged.
 pub use sbh_normalize as normalizer;
 pub mod rag;
-pub mod regenerative_forge;
-pub mod reputation;
 #[cfg(feature = "serve")]
 pub mod serve;
-pub mod static_analysis;
-pub mod tool_forge;
-pub mod tool_memory;
 pub mod transformer;
 pub mod verifier;
-pub mod wasm_forge;
 
 use anyhow::Result;
 use types::{Config, HarnessResult};

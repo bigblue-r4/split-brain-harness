@@ -12,14 +12,14 @@ use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
-use crate::backends::InferenceEngine;
-use crate::capability::{Budget, CapabilityMemoryRecord, CapabilityRequest, ToolMetrics};
+use sbh_llm::InferenceEngine;
+use sbh_core::capability::{Budget, CapabilityMemoryRecord, CapabilityRequest, ToolMetrics};
 use crate::code_gen::{self, GeneratedTool};
-use crate::input_validation;
-use crate::policy::{self, PolicyState};
+use sbh_core::input_validation;
+use sbh_safety::policy::{self, PolicyState};
 use crate::reputation::{self, ReputationScore};
 use crate::tool_memory::CapabilityMemory;
-use crate::types::Soul;
+use sbh_core::types::Soul;
 use crate::wasm_forge::{CompileOutcome, ExecuteOutcome, WasmCompiler, WasmExecutor};
 
 // ---------------------------------------------------------------------------
@@ -135,8 +135,8 @@ impl<'e> RegenerativeForge<'e> {
     pub async fn handle(&mut self, req: &CapabilityRequest, input: &str) -> RegenerativeReport {
         let report = self.handle_inner(req, input).await;
         if let Some(ref path) = self.audit_path {
-            let entry = crate::audit::AuditEntry {
-                timestamp: crate::audit::iso_now(),
+            let entry = sbh_store::audit::AuditEntry {
+                timestamp: sbh_store::audit::iso_now(),
                 capability: req.capability.clone(),
                 signature: crate::tool_memory::CapabilityMemory::derive_signature(req),
                 attempt_count: report.attempts.len(),
@@ -150,7 +150,7 @@ impl<'e> RegenerativeForge<'e> {
                     .and_then(|a| a.failure_reason.as_deref())
                     .map(|s| s.chars().take(200).collect()),
             };
-            if let Err(e) = crate::audit::append(path, &entry) {
+            if let Err(e) = sbh_store::audit::append(path, &entry) {
                 eprintln!("[audit] warning: could not write to {path}: {e}");
             }
         }
@@ -256,7 +256,7 @@ impl<'e> RegenerativeForge<'e> {
                 Some(s) => s,
             };
             record.generation_succeeded = true;
-            last_source_fingerprint = Some(crate::audit::fingerprint(source.as_bytes()));
+            last_source_fingerprint = Some(sbh_store::audit::fingerprint(source.as_bytes()));
 
             // Step 2: static analysis + tests
             let sa = crate::static_analysis::check(&source);
@@ -476,7 +476,7 @@ fn shape_token(contract: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capability::CapabilityConstraints;
+    use sbh_core::capability::CapabilityConstraints;
     use crate::wasm_forge::{CompileOutcome, ExecuteOutcome, WasmCompiler, WasmExecutor};
     use async_trait::async_trait;
 
@@ -582,7 +582,7 @@ pub fn run(input: &str) -> Result<String, String> { Ok("ok".into()) }
         Box<dyn WasmExecutor>,
     ) {
         let engine = RotatingEngine::new(responses);
-        let soul = crate::soul::load(None).unwrap();
+        let soul = sbh_safety::soul::load(None).unwrap();
         let compiler: Box<dyn WasmCompiler> = Box::new(MockCompiler(compile));
         let executor: Box<dyn WasmExecutor> = Box::new(MockExecutor(execute));
         (engine, soul, compiler, executor)
@@ -716,7 +716,7 @@ pub fn run(input: &str) -> Result<String, String> { Ok("ok".into()) }
         }
 
         let engine = RotatingEngine::new(vec![Ok(good_response()), Ok(good_response())]);
-        let soul = crate::soul::load(None).unwrap();
+        let soul = sbh_safety::soul::load(None).unwrap();
         let compiler: Box<dyn WasmCompiler> = Box::new(RotatingCompiler(std::sync::Mutex::new(
             vec![
                 CompileOutcome::CompilationFailed {
@@ -802,7 +802,7 @@ pub fn run(input: &str) -> Result<String, String> { Ok("ok".into()) }
 
         // Pre-populate memory with 3 consecutive failures
         let sig = CapabilityMemory::derive_signature(&clean_req());
-        let rec = crate::capability::CapabilityMemoryRecord {
+        let rec = sbh_core::capability::CapabilityMemoryRecord {
             problem_signature: sig,
             solution_pattern: "regenerative:word_count".into(),
             input_shape: "utf8".into(),
@@ -884,7 +884,7 @@ pub fn run(input: &str) -> Result<String, String> { Ok("ok".into()) }
         );
         let mut f =
             RegenerativeForge::with_deps(3, Budget::default(), &engine, soul, compiler, executor);
-        let big = "x".repeat(crate::input_validation::MAX_FORGE_INPUT_BYTES + 1);
+        let big = "x".repeat(sbh_core::input_validation::MAX_FORGE_INPUT_BYTES + 1);
         let report = f.handle(&clean_req(), &big).await;
         assert!(!report.accepted);
         assert!(report.rejection_reasons[0].contains("input validation"));

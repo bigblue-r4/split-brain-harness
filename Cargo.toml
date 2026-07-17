@@ -36,6 +36,7 @@ sbh-core      = { path = "crates/sbh-core" }
 sbh-store     = { path = "crates/sbh-store" }
 sbh-llm       = { path = "crates/sbh-llm" }
 sbh-safety    = { path = "crates/sbh-safety" }
+sbh-forge     = { path = "crates/sbh-forge" }
 axum         = { version = "0.7", features = ["json"], optional = true }
 axum-server  = { version = "0.7", features = ["tls-rustls"], optional = true }
 ratatui      = { version = "0.29", optional = true }

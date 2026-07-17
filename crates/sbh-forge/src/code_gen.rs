@@ -3,10 +3,10 @@
 /// Sends a CapabilityRequest to the inference engine and parses the response
 /// into a GeneratedTool with static analysis results. No compilation or
 /// execution happens here.
-use crate::backends::InferenceEngine;
-use crate::capability::CapabilityRequest;
+use sbh_llm::InferenceEngine;
+use sbh_core::capability::CapabilityRequest;
 use crate::static_analysis::{self, StaticAnalysisReport};
-use crate::types::Soul;
+use sbh_core::types::Soul;
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -167,7 +167,7 @@ pub fn extract_function_name(source: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capability::CapabilityConstraints;
+    use sbh_core::capability::CapabilityConstraints;
 
     fn clean_req() -> CapabilityRequest {
         CapabilityRequest {
