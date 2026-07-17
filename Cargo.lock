@@ -1292,6 +1292,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sbh-safety"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "sbh-core",
+ "tempfile",
+]
+
+[[package]]
 name = "sbh-store"
 version = "0.1.0"
 dependencies = [
@@ -1494,6 +1503,7 @@ dependencies = [
  "sbh-core",
  "sbh-llm",
  "sbh-normalize",
+ "sbh-safety",
  "sbh-store",
  "serde",
  "serde_json",

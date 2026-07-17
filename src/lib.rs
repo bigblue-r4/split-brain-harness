@@ -11,6 +11,10 @@ pub use sbh_store::{audit, calibration, session_log};
 // `split_brain_harness::backends` resolve unchanged.
 pub use sbh_llm as backends;
 
+// v2: shared safety mid-layer extracted to sbh-safety; re-exported so
+// `crate::{soul,security,policy}` paths resolve unchanged.
+pub use sbh_safety::{policy, security, soul};
+
 pub mod adaptor;
 pub mod arbitrator;
 pub mod code_gen;
@@ -22,14 +26,11 @@ pub mod harness;
 // v2: extracted to the sbh-normalize crate; re-exported so `crate::normalizer`
 // and `split_brain_harness::normalizer` keep resolving unchanged.
 pub use sbh_normalize as normalizer;
-pub mod policy;
 pub mod rag;
 pub mod regenerative_forge;
 pub mod reputation;
-pub mod security;
 #[cfg(feature = "serve")]
 pub mod serve;
-pub mod soul;
 pub mod static_analysis;
 pub mod tool_forge;
 pub mod tool_memory;

@@ -1,4 +1,4 @@
-use crate::types::Soul;
+use sbh_core::types::Soul;
 use anyhow::{anyhow, Result};
 
 const DEFAULT_SOUL: &str = include_str!("../soul.md");
