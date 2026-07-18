@@ -1,0 +1,17 @@
+[package]
+name        = "sbh-safety"
+version     = "0.1.0"
+edition     = "2021"
+description = "Shared safety mid-layer for the Split-Brain Harness: soul loading (identity), path/secret security, and capability policy. Used by both the core pipeline and the forge."
+license     = "MIT"
+
+[lib]
+name = "sbh_safety"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow   = "1.0"
+sbh-core = { path = "../sbh-core" }
+
+[dev-dependencies]
+tempfile = "3"

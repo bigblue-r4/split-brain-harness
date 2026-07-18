@@ -248,15 +248,23 @@ pub struct CapabilityMemoryRecord {
 // Extraction adapter — used in harness.rs to wrap TelemetryResult
 // ---------------------------------------------------------------------------
 
-/// Wraps the model's full propose-stage output. The telemetry fields are at
-/// the top level (flattened) so existing model responses without
-/// capability_request still parse unchanged.
+/// The **strict contract** for what the proposer LLM emits — the parse boundary.
+/// The three telemetry sub-objects are `deny_unknown_fields` (a tight schema),
+/// while top-level enrichment fields (`rationale`, and future `tool_risk`) live
+/// here so they can be added without loosening that schema. `manipulation_risk`
+/// deserializes tolerantly to `Risk` (unknown values become `Risk::Unknown`
+/// rather than failing the parse). Telemetry fields are flattened so a response
+/// carrying only telemetry still parses.
 #[derive(Debug, Deserialize, Clone)]
-pub struct ModelProposalOutput {
+pub struct ModelContract {
     #[serde(flatten)]
     pub telemetry: crate::types::TelemetryResult,
     #[serde(default)]
     pub capability_request: Option<CapabilityRequest>,
+    /// Optional one-paragraph, plain-language explanation of the proposer's read.
+    /// Debug/explanation aid only — it does not affect verification.
+    #[serde(default)]
+    pub rationale: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -353,12 +361,12 @@ mod tests {
                 "coherence_rating": 0.95
             }
         }"#;
-        let output: ModelProposalOutput = serde_json::from_str(json).unwrap();
+        let output: ModelContract = serde_json::from_str(json).unwrap();
         assert!(
             output.capability_request.is_none(),
             "capability_request must be absent when not emitted"
         );
-        assert_eq!(output.telemetry.intent_matrix.manipulation_risk, "low");
+        assert_eq!(output.telemetry.intent_matrix.manipulation_risk.as_str(), "low");
     }
 
     #[test]
@@ -392,7 +400,7 @@ mod tests {
                 "reason": "10GB file cannot be reasoned over line-by-line in a single context window."
             }
         }"#;
-        let output: ModelProposalOutput = serde_json::from_str(json).unwrap();
+        let output: ModelContract = serde_json::from_str(json).unwrap();
         let req = output.capability_request.unwrap();
         assert_eq!(req.capability, "stream_parse_logs");
         assert_eq!(req.constraints.max_memory_mb, 128);

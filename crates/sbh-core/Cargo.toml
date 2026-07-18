@@ -1,0 +1,15 @@
+[package]
+name        = "sbh-core"
+version     = "0.1.0"
+edition     = "2021"
+description = "Core typed data model for the Split-Brain Harness: telemetry, verification, config, capability, and JSON extraction."
+license     = "MIT"
+
+[lib]
+name = "sbh_core"
+path = "src/lib.rs"
+
+[dependencies]
+serde      = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow     = "1.0"

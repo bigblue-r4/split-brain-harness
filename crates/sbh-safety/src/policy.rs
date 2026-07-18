@@ -6,7 +6,7 @@
 /// - filesystem writes are forbidden (read_only_input must be true)
 /// - resource limits must not exceed supervisor-side maximums
 /// - the request must pass its own validate() check
-use crate::capability::{Budget, CapabilityRequest, PolicyViolation, ToolMetrics};
+use sbh_core::capability::{Budget, CapabilityRequest, PolicyViolation, ToolMetrics};
 
 /// Hard-coded ceilings the supervisor will never negotiate past.
 const MAX_RUNTIME_MS: u64 = 10_000;
@@ -117,7 +117,7 @@ pub fn check_request(req: &CapabilityRequest) -> Vec<PolicyViolation> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capability::CapabilityConstraints;
+    use sbh_core::capability::CapabilityConstraints;
 
     fn clean_request() -> CapabilityRequest {
         CapabilityRequest {

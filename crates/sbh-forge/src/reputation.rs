@@ -117,7 +117,7 @@ pub fn compute_unknown() -> ReputationScore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capability::ToolMetrics;
+    use sbh_core::capability::ToolMetrics;
 
     fn metrics_from(runs: &[bool]) -> PatternMetrics {
         let mut pm = PatternMetrics::default();

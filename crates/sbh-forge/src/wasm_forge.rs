@@ -27,10 +27,10 @@ const WASM_EXEC_TIMEOUT_MS: u64 = 15_000;
 
 use serde::{Deserialize, Serialize};
 
-use crate::capability::{Budget, CapabilityMemoryRecord, CapabilityRequest, ToolMetrics};
+use sbh_core::capability::{Budget, CapabilityMemoryRecord, CapabilityRequest, ToolMetrics};
 use crate::code_gen::GeneratedTool;
-use crate::input_validation;
-use crate::policy::{self, PolicyState};
+use sbh_core::input_validation;
+use sbh_safety::policy::{self, PolicyState};
 use crate::tool_memory::CapabilityMemory;
 
 // ---------------------------------------------------------------------------
@@ -688,7 +688,7 @@ fn monotonic_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capability::CapabilityConstraints;
+    use sbh_core::capability::CapabilityConstraints;
     use crate::static_analysis;
 
     // --- Mock compiler ---
@@ -869,7 +869,7 @@ mod tests {
                 execution_ms: 0,
             },
         );
-        let big = "x".repeat(crate::input_validation::MAX_FORGE_INPUT_BYTES + 1);
+        let big = "x".repeat(sbh_core::input_validation::MAX_FORGE_INPUT_BYTES + 1);
         let report = forge.handle(&clean_req("x"), &verified_tool(), &big);
         assert!(!report.accepted);
         assert!(report.rejection_reasons[0].contains("input validation"));

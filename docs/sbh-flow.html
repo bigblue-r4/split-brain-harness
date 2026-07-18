@@ -1,0 +1,215 @@
+<style>
+  :root{
+    --bg:#0d141b; --panel:#131e28; --panel-2:#17232f; --border:#263644;
+    --ink:#dce6ef; --ink-dim:#8fa2b4; --ink-faint:#5f7183;
+    --amber:#f5b544; --cyan:#35c9d6; --red:#ff5d6c; --green:#5fd08a;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  /* Committed dark console — same on either OS theme by design */
+  *{box-sizing:border-box}
+  .wrap{
+    background:var(--bg); color:var(--ink); font-family:var(--sans);
+    line-height:1.5; padding:clamp(20px,4vw,52px);
+    min-height:100%;
+    background-image:
+      radial-gradient(90rem 60rem at 15% -10%, #10202c 0%, transparent 55%),
+      radial-gradient(70rem 50rem at 110% 10%, #171226 0%, transparent 50%);
+  }
+  .inner{max-width:1080px;margin:0 auto}
+
+  .eyebrow{
+    font-family:var(--mono); font-size:12px; letter-spacing:.22em;
+    text-transform:uppercase; color:var(--cyan); margin:0 0 10px;
+  }
+  h1{
+    font-size:clamp(26px,4.4vw,40px); line-height:1.08; margin:0 0 12px;
+    font-weight:650; letter-spacing:-.015em; text-wrap:balance;
+  }
+  h1 .amber{color:var(--amber)}
+  h1 .cyan{color:var(--cyan)}
+  .lede{
+    max-width:64ch; color:var(--ink-dim); font-size:clamp(15px,1.7vw,17px);
+    margin:0 0 30px;
+  }
+  .lede code{font-family:var(--mono);color:var(--ink);font-size:.92em}
+
+  .diagram{
+    background:var(--panel); border:1px solid var(--border);
+    border-radius:14px; padding:clamp(14px,2.4vw,28px);
+    overflow-x:auto; margin:0 0 12px;
+    box-shadow:0 1px 0 #1e2c38 inset, 0 20px 50px -30px #000;
+  }
+  .diagram pre.mermaid{margin:0;min-width:640px;text-align:center;background:transparent}
+  .cap{
+    font-family:var(--mono); font-size:12px; color:var(--ink-faint);
+    letter-spacing:.04em; margin:0 0 34px;
+  }
+
+  .grid{
+    display:grid; gap:16px; margin:0 0 20px;
+    grid-template-columns:repeat(auto-fit,minmax(250px,1fr));
+  }
+  .card{
+    background:var(--panel-2); border:1px solid var(--border);
+    border-radius:12px; padding:18px 20px; position:relative;
+  }
+  .card::before{
+    content:""; position:absolute; left:0; top:16px; bottom:16px; width:3px;
+    border-radius:3px; background:var(--accent,var(--ink-faint));
+  }
+  .card h3{
+    margin:0 0 4px; font-family:var(--mono); font-size:12.5px;
+    letter-spacing:.12em; text-transform:uppercase; color:var(--accent,var(--ink));
+  }
+  .card .role{font-size:14px;color:var(--ink);margin:0 0 8px;font-weight:600}
+  .card p{margin:0;color:var(--ink-dim);font-size:14px}
+  .card ul{margin:8px 0 0;padding-left:0;list-style:none}
+  .card li{
+    font-family:var(--mono); font-size:12.5px; color:var(--ink-dim);
+    padding:2px 0 2px 14px; position:relative;
+  }
+  .card li::before{content:"›";position:absolute;left:0;color:var(--accent)}
+  .c-amber{--accent:var(--amber)} .c-cyan{--accent:var(--cyan)}
+  .c-red{--accent:var(--red)} .c-green{--accent:var(--green)}
+
+  .gate-note{
+    display:flex; gap:14px; align-items:baseline; flex-wrap:wrap;
+    background:linear-gradient(90deg,#25121a,#17232f 60%);
+    border:1px solid #4a2530; border-radius:12px; padding:16px 20px; margin:0 0 20px;
+  }
+  .gate-note .tag{
+    font-family:var(--mono); font-size:12px; letter-spacing:.14em;
+    text-transform:uppercase; color:var(--red); white-space:nowrap;
+  }
+  .gate-note code{font-family:var(--mono);color:var(--ink);font-size:14px}
+  .gate-note span.dim{color:var(--ink-dim);font-size:14px}
+
+  .example{
+    background:var(--panel); border:1px solid var(--border);
+    border-left:3px solid var(--amber); border-radius:12px;
+    padding:18px 22px; margin:0 0 20px;
+  }
+  .example h3{margin:0 0 10px;font-size:15px;font-weight:650}
+  .example h3 .id{font-family:var(--mono);color:var(--amber);font-weight:500}
+  .telem{
+    display:flex; gap:10px 22px; flex-wrap:wrap; font-family:var(--mono);
+    font-size:13px; margin:0 0 10px;
+  }
+  .telem b{color:var(--ink);font-weight:500}
+  .telem .warm{color:var(--amber)} .telem .cool{color:var(--cyan)}
+  .telem .hot{color:var(--red)}
+  .example p{margin:0;color:var(--ink-dim);font-size:14px}
+  .example p .flag{color:var(--red);font-family:var(--mono);font-size:13px}
+
+  footer{
+    color:var(--ink-faint); font-family:var(--mono); font-size:12px;
+    border-top:1px solid var(--border); padding-top:16px; margin-top:8px;
+  }
+  footer code{color:var(--ink-dim)}
+</style>
+
+<div class="wrap">
+ <div class="inner">
+  <p class="eyebrow">Split-Brain Harness · pipeline</p>
+  <h1>One input, <span class="amber">two hemispheres</span>, <span class="cyan">one verdict</span></h1>
+  <p class="lede">
+    Every input is read twice before a response is ever generated. A <b>Proposer</b> reads
+    intent and emotion; a <b>Verifier</b> audits that read with deterministic checks. Their
+    <b>disagreement is the alarm</b>. Traced from <code>src/harness.rs → analyze()</code>.
+  </p>
+
+  <div class="diagram">
+   <pre class="mermaid">
+%%{init: {'theme':'base','flowchart':{'curve':'linear','nodeSpacing':40,'rankSpacing':52},'themeVariables':{'fontFamily':'ui-monospace, SFMono-Regular, Menlo, monospace','fontSize':'13px','lineColor':'#5b6b7a','clusterBkg':'rgba(255,255,255,0.015)','clusterBorder':'#33414f','edgeLabelBackground':'#131e28'}}}%%
+flowchart TB
+  IN([Input text]):::io
+  N0["Stage 0 · Normalizer<br/>7-pass deobfuscation<br/>homoglyphs · base64 · leet"]:::pre
+  AD["Adaptor<br/>trigger-matched<br/>context packs"]:::pre
+  TR["Transformer<br/>soul + RAG →<br/>system prompt"]:::pre
+
+  subgraph H1[" HEMISPHERE 1 · PROPOSE — one LLM call "]
+    P["reads intent — does not answer<br/> <br/>affective_telemetry<br/>intent_matrix<br/>cognitive_state"]:::propose
+  end
+  subgraph H2[" HEMISPHERE 2 · VERIFY — deterministic, no API cost "]
+    V["6 consistency checks<br/> <br/>passed · flags · confidence"]:::verify
+  end
+
+  GATE{{"HarnessResult<br/> <br/>stop_and_ask if<br/>confidence &lt; 0.4  or  ≥ 3 flags"}}:::gate
+
+  IN --> N0 --> AD --> TR --> P
+  P ==>|audits · disagreement = alarm| V
+  V --> GATE
+  N0 -.->|obfuscation detected → force fail| GATE
+
+  classDef io fill:#1b2530,stroke:#5b6b7a,color:#c7d2dd,stroke-width:1px;
+  classDef pre fill:#122232,stroke:#2f6f8f,color:#bfe0ef,stroke-width:1px;
+  classDef propose fill:#2c2011,stroke:#e0972a,color:#f6cd85,stroke-width:1.5px;
+  classDef verify fill:#0e2a30,stroke:#2bb6c4,color:#95e7ef,stroke-width:1.5px;
+  classDef gate fill:#301219,stroke:#e0455b,color:#ffb3bd,stroke-width:1.5px;
+  linkStyle 4 stroke:#e0972a,stroke-width:2px,color:#f6cd85;
+  linkStyle 6 stroke:#e0455b,stroke-width:1.5px,color:#ff8b98;
+   </pre>
+  </div>
+  <p class="cap">Solid = data flow · thick amber = the audit link · dashed red = obfuscation override (disguise alone is disqualifying).</p>
+
+  <div class="grid">
+   <div class="card c-cyan">
+    <h3>Stage 0–pre</h3>
+    <p class="role">Normalize &amp; assemble</p>
+    <p>The disguise is stripped and the prompt is built before either hemisphere runs.</p>
+    <ul>
+      <li>Normalizer — deobfuscate</li>
+      <li>Adaptor — select context packs</li>
+      <li>Transformer — soul + RAG</li>
+    </ul>
+   </div>
+   <div class="card c-amber">
+    <h3>Hemisphere 1</h3>
+    <p class="role">Propose · reads intent</p>
+    <p>One soul-wrapped LLM call. It does not answer — it returns structured telemetry. Non-JSON or a refusal fails closed to a safe fallback.</p>
+    <ul>
+      <li>affective_telemetry</li>
+      <li>intent_matrix · manipulation_risk</li>
+      <li>cognitive_state · urgency, coherence</li>
+    </ul>
+   </div>
+   <div class="card c-cyan">
+    <h3>Hemisphere 2</h3>
+    <p class="role">Verify · audits the read</p>
+    <p>Six deterministic checks on the telemetry — always on, zero extra API cost — hunting for internal contradiction.</p>
+    <ul>
+      <li>urgency ≥ 0.7 vs risk = low</li>
+      <li>adversarial tone vs risk = low</li>
+      <li>coherence &lt; 0.3 · +3 more</li>
+    </ul>
+   </div>
+  </div>
+
+  <div class="gate-note">
+    <span class="tag">The gate</span>
+    <code>stop_and_ask = true</code>
+    <span class="dim">when <code>confidence &lt; 0.4</code> or <code>≥ 3 flags</code> fire — the result must not be acted on blindly.</span>
+  </div>
+
+  <div class="example">
+    <h3>Worked example · <span class="id">warehouse-08</span> — micro-supply route degradation</h3>
+    <div class="telem">
+      <b class="warm">urgency_vector = 0.80</b>
+      <b class="cool">manipulation_risk = low</b>
+      <b>confidence = 0.75</b>
+    </div>
+    <p>
+      The Proposer read high urgency but low manipulation risk. Hemisphere 2's
+      <b>urgency-vs-risk</b> check caught the mismatch and raised
+      <span class="flag">"urgency may be manufactured"</span> — the two hemispheres
+      disagreed, and the disagreement is the signal. One flag, so it stayed under the
+      stop_and_ask threshold. Live SBH run, 2026-07-15, Ollama backend.
+    </p>
+  </div>
+
+  <footer>
+    Source: <code>split-brain-harness</code> · <code>src/{harness,normalizer,adaptor,transformer,verifier}.rs</code> · run bare as <code>sbh --raw "…"</code> or via <code>sbh analyze</code>.
+  </footer>
+ </div>
+</div>

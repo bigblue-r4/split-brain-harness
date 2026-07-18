@@ -13,13 +13,13 @@
 ///   static analysis → test presence check → memory update
 use std::time::Instant;
 
-use crate::backends::InferenceEngine;
-use crate::capability::{Budget, CapabilityMemoryRecord, CapabilityRequest, ToolMetrics};
+use sbh_llm::InferenceEngine;
+use sbh_core::capability::{Budget, CapabilityMemoryRecord, CapabilityRequest, ToolMetrics};
 use crate::code_gen::{CodeGenerator, GeneratedTool};
-use crate::input_validation;
-use crate::policy::{self, PolicyState};
+use sbh_core::input_validation;
+use sbh_safety::policy::{self, PolicyState};
 use crate::tool_memory::CapabilityMemory;
-use crate::types::Soul;
+use sbh_core::types::Soul;
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -234,8 +234,8 @@ fn shape_token(contract: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capability::CapabilityConstraints;
-    use crate::soul;
+    use sbh_core::capability::CapabilityConstraints;
+    use sbh_safety::soul;
     use async_trait::async_trait;
 
     // --- Mock engine helpers ---
@@ -245,7 +245,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl crate::backends::InferenceEngine for MockEngine {
+    impl sbh_llm::InferenceEngine for MockEngine {
         async fn generate(&self, _sys: &str, _prompt: &str) -> Result<String, String> {
             Ok(self.response.clone())
         }
@@ -254,7 +254,7 @@ mod tests {
     struct ErrorEngine;
 
     #[async_trait]
-    impl crate::backends::InferenceEngine for ErrorEngine {
+    impl sbh_llm::InferenceEngine for ErrorEngine {
         async fn generate(&self, _sys: &str, _prompt: &str) -> Result<String, String> {
             Err("backend unavailable".into())
         }
@@ -375,7 +375,7 @@ pub fn run(input: &str) -> Result<String, String> {
         };
         let soul = soul::load(None).unwrap();
         let mut forge = GenerativeForge::new(&engine, soul);
-        let big = "x".repeat(crate::input_validation::MAX_FORGE_INPUT_BYTES + 1);
+        let big = "x".repeat(sbh_core::input_validation::MAX_FORGE_INPUT_BYTES + 1);
         let report = forge.handle(&clean_req("word_count"), &big).await;
         assert!(!report.accepted);
         assert!(report.rejection_reasons[0].contains("input validation"));

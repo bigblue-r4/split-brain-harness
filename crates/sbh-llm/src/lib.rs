@@ -1,4 +1,4 @@
-use crate::types::{BackendType, Config};
+use sbh_core::types::{BackendType, Config};
 use async_trait::async_trait;
 use reqwest::Client;
 

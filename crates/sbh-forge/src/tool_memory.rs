@@ -10,7 +10,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::capability::{CapabilityMemoryRecord, CapabilityRequest, ToolMetrics};
+use sbh_core::capability::{CapabilityMemoryRecord, CapabilityRequest, ToolMetrics};
 
 /// Running performance metrics accumulated across all runs of one pattern.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -162,7 +162,7 @@ fn shape_token(contract: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capability::CapabilityConstraints;
+    use sbh_core::capability::CapabilityConstraints;
 
     fn make_record(sig: &str) -> CapabilityMemoryRecord {
         CapabilityMemoryRecord {

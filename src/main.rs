@@ -23,7 +23,11 @@ async fn main() -> Result<()> {
     // doctor, audit, and export-ollama handle their own reporting or need no model.
     let needs_backend = !matches!(
         cmd,
-        Command::Doctor | Command::Audit { .. } | Command::ExportOllama { .. }
+        Command::Doctor
+            | Command::Audit { .. }
+            | Command::ExportOllama { .. }
+            | Command::Calibrate { .. }
+            | Command::Feedback { .. }
     );
     // --dump-prompt exits before any model call, so skip validation there too.
     let is_dump = matches!(
@@ -112,6 +116,12 @@ async fn main() -> Result<()> {
             )
             .await
         }
+        Command::Calibrate { store } => cmd_calibrate(&config, store.as_deref()),
+        Command::Feedback {
+            fingerprint,
+            correct,
+            store,
+        } => cmd_feedback(&config, &fingerprint, correct, store.as_deref()),
     }
 }
 
@@ -165,6 +175,14 @@ enum Command {
         output: Option<String>,
         fail_on_regression: bool,
     },
+    Calibrate {
+        store: Option<String>,
+    },
+    Feedback {
+        fingerprint: String,
+        correct: bool,
+        store: Option<String>,
+    },
 }
 
 /// Collect positional args (non-flag args), skipping values consumed by
@@ -183,6 +201,8 @@ fn positional_args(args: &[String]) -> Vec<&str> {
         "--export",
         "--tls-cert",
         "--tls-key",
+        "--store",
+        "--fingerprint",
     ];
     let mut result = vec![];
     let mut skip_next = false;
@@ -235,6 +255,31 @@ fn parse_command(args: &[String]) -> Result<Command> {
             let tail = flag_value(args, "--tail").and_then(|s| s.parse().ok());
             let since = flag_value(args, "--since");
             return Ok(Command::Audit { tail, since });
+        }
+        Some("calibrate") => {
+            let store = flag_value(args, "--store");
+            return Ok(Command::Calibrate { store });
+        }
+        Some("feedback") => {
+            let fingerprint = flag_value(args, "--fingerprint").ok_or_else(|| {
+                anyhow!(
+                    "feedback requires --fingerprint <fp> and one of --correct / --misread\n\
+                     Usage: split-brain-harness feedback --fingerprint <fp> (--correct | --misread) [--store <path>]"
+                )
+            })?;
+            let correct = args.contains(&"--correct".to_string());
+            let misread = args.contains(&"--misread".to_string());
+            if correct == misread {
+                return Err(anyhow!(
+                    "feedback requires exactly one of --correct or --misread"
+                ));
+            }
+            let store = flag_value(args, "--store");
+            return Ok(Command::Feedback {
+                fingerprint,
+                correct,
+                store,
+            });
         }
         Some("bench") => {
             let input = positional.get(1).map(|s| s.to_string()).ok_or_else(|| {
@@ -367,7 +412,9 @@ fn parse_command(args: &[String]) -> Result<Command> {
              Usage: split-brain-harness debug-bundle [--output <file>] \"input\"\n\
              Usage: split-brain-harness forge \"capability\" \"input\"\n\
              Usage: split-brain-harness serve [--listen <addr>] [--session-log <path>] [--tls-cert <pem>] [--tls-key <pem>]\n\
-             Usage: split-brain-harness bench <file.jsonl> [--baseline <prev.jsonl>] [--output <out.jsonl>] [--fail-on-regression]"
+             Usage: split-brain-harness bench <file.jsonl> [--baseline <prev.jsonl>] [--output <out.jsonl>] [--fail-on-regression]\n\
+             Usage: split-brain-harness calibrate [--store <path>]\n\
+             Usage: split-brain-harness feedback --fingerprint <fp> (--correct | --misread) [--store <path>]"
         ));
     }
 
@@ -513,6 +560,9 @@ fn print_result_pretty(r: &HarnessResult) {
         "  {DIM}subtext{R}    {}",
         r.telemetry.intent_matrix.subtextual_motive
     );
+    if let Some(rat) = r.trace.iter().find(|t| t.stage == "rationale") {
+        println!("  {DIM}rationale{R}  {DIM}{}{R}", rat.claim);
+    }
     println!("{DIM}{rule}{R}");
     let supported = if r.verification.passed {
         "passed"
@@ -525,6 +575,15 @@ fn print_result_pretty(r: &HarnessResult) {
         String::new()
     };
     println!("  {DIM}verification{R}  {supported}  {DIM}conf:{R} {conf_color}{conf:.2}{R}{sas}");
+    if let Some(ref refinement) = r.refinement {
+        if refinement.iterations.len() > 1 || refinement.decision.verdict != split_brain_harness::types::ArbiterVerdict::Accept {
+            println!(
+                "  {DIM}refinement{R}   {} iteration(s) · {DIM}verdict:{R} {}",
+                refinement.iterations.len(),
+                refinement.decision.verdict
+            );
+        }
+    }
     if r.verification.consistency_flags.is_empty() {
         println!("  {DIM}flags{R}         none");
     } else {
@@ -811,6 +870,78 @@ fn cmd_audit(
 }
 
 // ---------------------------------------------------------------------------
+// calibrate / feedback (confidence calibration — A5)
+// ---------------------------------------------------------------------------
+
+fn resolve_store(
+    config: &split_brain_harness::types::Config,
+    store: Option<&str>,
+) -> Result<String> {
+    store
+        .map(String::from)
+        .or_else(|| config.calibration_path.clone())
+        .ok_or_else(|| {
+            anyhow!("no calibration store — pass --store <path> or set SBH_CALIBRATION_PATH")
+        })
+}
+
+fn cmd_calibrate(
+    config: &split_brain_harness::types::Config,
+    store: Option<&str>,
+) -> Result<()> {
+    use split_brain_harness::calibration;
+    let path = resolve_store(config, store)?;
+    let entries = match calibration::read_all(&path) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            println!("calibration store: {path}  (no entries yet)");
+            return Ok(());
+        }
+        Err(e) => return Err(anyhow!("could not read calibration store at {path}: {e}")),
+    };
+    let samples = calibration::labeled_samples(&entries);
+    println!("calibration store: {path}");
+    println!(
+        "  {} entries · {} labeled sample(s)",
+        entries.len(),
+        samples.len()
+    );
+    match calibration::fit_platt(&samples) {
+        Some(params) => {
+            calibration::save_params(&path, &params)?;
+            println!("  fitted Platt scaling: a={:.4} b={:.4}", params.a, params.b);
+            println!("  wrote {}", calibration::params_path(&path));
+            println!("  runtime confidence will now be recalibrated when this store is configured.");
+        }
+        None => {
+            println!(
+                "  insufficient/unbalanced labeled data to fit (need >= {} labeled samples, both classes present).",
+                calibration::MIN_SAMPLES
+            );
+            println!("  runtime confidence stays uncalibrated (identity) until a fit succeeds.");
+        }
+    }
+    Ok(())
+}
+
+fn cmd_feedback(
+    config: &split_brain_harness::types::Config,
+    fingerprint: &str,
+    correct: bool,
+    store: Option<&str>,
+) -> Result<()> {
+    use split_brain_harness::calibration;
+    let path = resolve_store(config, store)?;
+    let entry = calibration::label_entry(fingerprint, correct);
+    calibration::append(&path, &entry)
+        .map_err(|e| anyhow!("could not append feedback to {path}: {e}"))?;
+    println!(
+        "recorded feedback: fingerprint={fingerprint} correct={correct} → {path}"
+    );
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // bench
 // ---------------------------------------------------------------------------
 
@@ -935,17 +1066,17 @@ async fn cmd_bench(
         match analyze(&text, config).await {
             Ok(result) => {
                 let elapsed = t0.elapsed().as_secs_f32();
-                let risk = &result.telemetry.intent_matrix.manipulation_risk;
+                let risk = result.telemetry.intent_matrix.manipulation_risk.as_str();
                 let status = bench_status(risk, baseline_risk);
                 let flags = &result.verification.consistency_flags;
 
-                match risk.as_str() {
+                match risk {
                     "low" => n_low += 1,
                     "medium" => n_med += 1,
                     _ => n_high += 1,
                 }
 
-                let risk_col = match risk.as_str() {
+                let risk_col = match risk {
                     "high" => red,
                     "medium" => yellow,
                     _ => green,
@@ -1121,6 +1252,7 @@ fn demo_offline_result(idx: usize) -> HarnessResult {
             trace: vec![],
             capability_request: None,
             obfuscation: None,
+            refinement: None,
         },
         // case 1 — direct prompt injection, system exfiltration
         1 => HarnessResult {
@@ -1153,6 +1285,7 @@ fn demo_offline_result(idx: usize) -> HarnessResult {
             trace: vec![],
             capability_request: None,
             obfuscation: None,
+            refinement: None,
         },
         // case 2 — insider threat, access scoping
         2 => HarnessResult {
@@ -1185,6 +1318,7 @@ fn demo_offline_result(idx: usize) -> HarnessResult {
             trace: vec![],
             capability_request: None,
             obfuscation: None,
+            refinement: None,
         },
         // case 3 — foreign adversary, authority impersonation
         3 => HarnessResult {
@@ -1218,6 +1352,7 @@ fn demo_offline_result(idx: usize) -> HarnessResult {
             trace: vec![],
             capability_request: None,
             obfuscation: None,
+            refinement: None,
         },
         // case 4 — BEC via AI proxy, financial coercion
         _ => HarnessResult {
@@ -1251,6 +1386,7 @@ fn demo_offline_result(idx: usize) -> HarnessResult {
             trace: vec![],
             capability_request: None,
             obfuscation: None,
+            refinement: None,
         },
     }
 }
@@ -1279,7 +1415,7 @@ fn demo_print_result(
     }
     let t = &result.telemetry;
     let v = &result.verification;
-    let risk = &t.intent_matrix.manipulation_risk;
+    let risk = t.intent_matrix.manipulation_risk.as_str();
     let (col, rst) = demo_color(risk, no_color);
     let verdict = match (v.passed, no_color) {
         (true, true) => "✓ passed",
@@ -1327,7 +1463,7 @@ fn demo_print_summary(cases: &[&DemoCase], results: &[HarnessResult], no_color: 
     let mut n_flagged = 0u32;
 
     for (i, (case, result)) in cases.iter().zip(results.iter()).enumerate() {
-        let risk = &result.telemetry.intent_matrix.manipulation_risk;
+        let risk = result.telemetry.intent_matrix.manipulation_risk.as_str();
         let (col, rst) = demo_color(risk, no_color);
         let verdict = if result.verification.passed {
             "✓ passed"
@@ -1345,7 +1481,7 @@ fn demo_print_summary(cases: &[&DemoCase], results: &[HarnessResult], no_color: 
             label,
             risk
         );
-        match risk.as_ref() {
+        match risk {
             "high" => n_high += 1,
             "medium" => n_med += 1,
             _ => n_low += 1,
@@ -1560,7 +1696,7 @@ fn demo_export_markdown(
     let mut n_passed = 0u32;
 
     for (i, (case, result)) in cases.iter().zip(results.iter()).enumerate() {
-        let risk = &result.telemetry.intent_matrix.manipulation_risk;
+        let risk = result.telemetry.intent_matrix.manipulation_risk.as_str();
         let intensity = result.telemetry.affective_telemetry.emotional_intensity;
         let urgency = result.telemetry.cognitive_state.urgency_vector;
         let verdict = if result.verification.passed {
@@ -1568,7 +1704,7 @@ fn demo_export_markdown(
         } else {
             "✗ flagged"
         };
-        match risk.as_str() {
+        match risk {
             "high" => n_high += 1,
             "medium" => n_med += 1,
             _ => n_low += 1,
@@ -1663,7 +1799,7 @@ fn demo_serve_offline_result(idx: usize) -> HarnessResult {
                 assumptions: vec![], unresolved: vec![], confidence: 0.91,
                 disagreement: Default::default(), stop_and_ask: false,
             },
-            trace: vec![], capability_request: None, obfuscation: None,
+            trace: vec![], capability_request: None, obfuscation: None, refinement: None,
         },
         1 => HarnessResult {
             telemetry: TelemetryResult {
@@ -1684,7 +1820,7 @@ fn demo_serve_offline_result(idx: usize) -> HarnessResult {
                 assumptions: vec![], unresolved: vec![], confidence: 0.93,
                 disagreement: Default::default(), stop_and_ask: false,
             },
-            trace: vec![], capability_request: None, obfuscation: None,
+            trace: vec![], capability_request: None, obfuscation: None, refinement: None,
         },
         2 => HarnessResult {
             telemetry: TelemetryResult {
@@ -1708,7 +1844,7 @@ fn demo_serve_offline_result(idx: usize) -> HarnessResult {
                 unsupported_claims: vec![], assumptions: vec![], unresolved: vec![],
                 confidence: 0.74, disagreement: Default::default(), stop_and_ask: false,
             },
-            trace: vec![], capability_request: None, obfuscation: None,
+            trace: vec![], capability_request: None, obfuscation: None, refinement: None,
         },
         3 => HarnessResult {
             telemetry: TelemetryResult {
@@ -1733,7 +1869,7 @@ fn demo_serve_offline_result(idx: usize) -> HarnessResult {
                 unsupported_claims: vec![], assumptions: vec![], unresolved: vec![],
                 confidence: 0.14, disagreement: Default::default(), stop_and_ask: true,
             },
-            trace: vec![], capability_request: None, obfuscation: None,
+            trace: vec![], capability_request: None, obfuscation: None, refinement: None,
         },
         _ => HarnessResult {
             telemetry: TelemetryResult {
@@ -1758,7 +1894,7 @@ fn demo_serve_offline_result(idx: usize) -> HarnessResult {
                 unsupported_claims: vec![], assumptions: vec![], unresolved: vec![],
                 confidence: 0.11, disagreement: Default::default(), stop_and_ask: true,
             },
-            trace: vec![], capability_request: None, obfuscation: None,
+            trace: vec![], capability_request: None, obfuscation: None, refinement: None,
         },
     }
 }
@@ -1882,7 +2018,7 @@ async fn cmd_demo_serve(
             }
         };
 
-        let risk = &result.telemetry.intent_matrix.manipulation_risk;
+        let risk = result.telemetry.intent_matrix.manipulation_risk.as_str();
         let score = serve_risk_score(risk);
         scores.push(score);
 
@@ -2066,7 +2202,7 @@ fn demo_serve_export_markdown(
 
     for (i, (case, result)) in DEMO_SERVE_CASES.iter().zip(results.iter()).enumerate() {
         let turn = i + 1;
-        let risk = &result.telemetry.intent_matrix.manipulation_risk;
+        let risk = result.telemetry.intent_matrix.manipulation_risk.as_str();
         let intensity = result.telemetry.affective_telemetry.emotional_intensity;
         let urgency = result.telemetry.cognitive_state.urgency_vector;
         let alert = if escalation_turn == Some(turn) {

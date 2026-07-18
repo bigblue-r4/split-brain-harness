@@ -4,11 +4,12 @@ use serde::{Deserialize, Serialize};
 // Backend selection
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Default)]
 pub enum BackendType {
     #[serde(rename = "openai-compat")]
     OpenAiCompat,
     #[serde(rename = "ollama-native")]
+    #[default]
     OllamaNative,
     #[serde(rename = "local-embedded")]
     LocalEmbedded,
@@ -38,6 +39,32 @@ pub enum VerifyMode {
     /// Skip verification entirely.
     #[serde(rename = "none")]
     None,
+}
+
+// ---------------------------------------------------------------------------
+// Arbitrator mode (v1.5 active reconciliation)
+// ---------------------------------------------------------------------------
+
+/// Controls the post-verify reconciliation loop.
+#[derive(Debug, Deserialize, Clone, Default, PartialEq, Eq)]
+pub enum ArbitratorMode {
+    /// No refinement loop — one-shot propose→verify→gate (pre-v1.5 behavior).
+    #[serde(rename = "off")]
+    Off,
+    /// Bounded refinement loop adjudicated by deterministic rules (no extra LLM
+    /// call). Default. An `Llm` variant is reserved for v2.
+    #[serde(rename = "rules")]
+    #[default]
+    Rules,
+}
+
+impl std::fmt::Display for ArbitratorMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ArbitratorMode::Off => write!(f, "off"),
+            ArbitratorMode::Rules => write!(f, "rules"),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -84,10 +111,78 @@ pub struct Config {
     /// Merged with the embedded default corpus and injected into the system prompt.
     /// None = embedded default corpus only.
     pub context_path: Option<String>,
+
+    // --- v1.5 active reconciliation ---
+    /// Adjudication mode for the post-verify refinement loop. Default `Rules`.
+    /// `Off` restores one-shot propose→verify behavior.
+    #[serde(default)]
+    pub arbitrator: ArbitratorMode,
+    /// Maximum propose→verify iterations, including the first. Default 2.
+    /// 1 (or `arbitrator = off`) disables refinement.
+    #[serde(default = "default_refine_max_iters")]
+    pub refine_max_iters: usize,
+    /// Confidence at/above which the arbitrator accepts and stops refining.
+    /// Default 0.4 (matches the stop_and_ask threshold).
+    #[serde(default = "default_stop_and_ask_threshold")]
+    pub refine_confidence_target: f32,
+    /// Gate threshold: `stop_and_ask` fires below this confidence. Default 0.4.
+    /// Promotes the previously hardcoded verifier constant to config.
+    #[serde(default = "default_stop_and_ask_threshold")]
+    pub stop_and_ask_threshold: f32,
+    /// Path to the append-only confidence-calibration store (JSONL).
+    /// None = calibration features are not logged.
+    pub calibration_path: Option<String>,
+    /// Ask the proposer to emit a natural-language `rationale` paragraph.
+    /// Default **false**: the extra generation hurts JSON reliability and latency
+    /// on small local models (the default llama3.2:3b backend). Enable it with a
+    /// capable backend when the explanation is worth the cost.
+    #[serde(default)]
+    pub request_rationale: bool,
 }
 
 fn default_temperature() -> f32 {
     0.1
+}
+
+fn default_refine_max_iters() -> usize {
+    2
+}
+
+fn default_stop_and_ask_threshold() -> f32 {
+    0.4
+}
+
+impl Default for Config {
+    /// Canonical defaults — the same values `build_config` falls back to when no
+    /// env var or config.toml entry is present. Lets call sites (and tests) write
+    /// `Config { verify_mode: ..., ..Default::default() }` instead of a full literal.
+    fn default() -> Self {
+        Config {
+            backend: BackendType::OllamaNative,
+            endpoint: "http://localhost:11434".into(),
+            model_name: "llama3.2:3b".into(),
+            soul_path: String::new(),
+            api_key: None,
+            verify_mode: VerifyMode::Deterministic,
+            timeout_secs: 120,
+            temperature: default_temperature(),
+            dump_prompt: false,
+            dump_raw: false,
+            memory_path: None,
+            audit_path: None,
+            serve_key: None,
+            serve_rate_limit: 60,
+            serve_max_body_bytes: 1_048_576,
+            session_log_path: None,
+            context_path: None,
+            arbitrator: ArbitratorMode::Rules,
+            refine_max_iters: default_refine_max_iters(),
+            refine_confidence_target: default_stop_and_ask_threshold(),
+            stop_and_ask_threshold: default_stop_and_ask_threshold(),
+            calibration_path: None,
+            request_rationale: false,
+        }
+    }
 }
 
 impl std::fmt::Display for BackendType {
@@ -136,12 +231,72 @@ pub struct AfferentTelemetry {
     pub structural_tone: Vec<String>,
 }
 
+/// Coercion risk directed at the AI system. Typed, but **tolerant on the parse
+/// boundary**: the model must emit "low" | "medium" | "high", yet any other value
+/// deserializes to `Unknown(raw)` instead of failing the whole parse — preserving
+/// the raw string so the `manipulation-risk-value` check can flag it. Serializes
+/// back to the same lowercase strings (round-trip preserved), so downstream
+/// consumers that read `manipulation_risk` see no change.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Risk {
+    Low,
+    Medium,
+    High,
+    Unknown(String),
+}
+
+impl Risk {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Risk::Low => "low",
+            Risk::Medium => "medium",
+            Risk::High => "high",
+            Risk::Unknown(s) => s,
+        }
+    }
+    /// True unless the model emitted an unrecognized risk value.
+    pub fn is_recognized(&self) -> bool {
+        !matches!(self, Risk::Unknown(_))
+    }
+}
+
+impl From<&str> for Risk {
+    fn from(s: &str) -> Self {
+        match s.trim().to_lowercase().as_str() {
+            "low" => Risk::Low,
+            "medium" => Risk::Medium,
+            "high" => Risk::High,
+            _ => Risk::Unknown(s.to_string()),
+        }
+    }
+}
+impl From<String> for Risk {
+    fn from(s: String) -> Self {
+        Risk::from(s.as_str())
+    }
+}
+impl std::fmt::Display for Risk {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+impl Serialize for Risk {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(self.as_str())
+    }
+}
+impl<'de> Deserialize<'de> for Risk {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(Risk::from(String::deserialize(d)?))
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct IntentMatrix {
     pub stated_objective: String,
     pub subtextual_motive: String,
-    pub manipulation_risk: String,
+    pub manipulation_risk: Risk,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -231,6 +386,61 @@ pub struct ObfuscationReport {
     pub normalized_input: String,
 }
 
+// ---------------------------------------------------------------------------
+// Active reconciliation (v1.5): refinement loop + arbitrator
+// ---------------------------------------------------------------------------
+
+/// The arbitrator's verdict over a set of propose→verify iterations.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub enum ArbiterVerdict {
+    /// A revision cleared the bar — surface it as the result.
+    #[serde(rename = "accept")]
+    Accept,
+    /// Disagreement persists and budget remains — propose again with feedback.
+    #[serde(rename = "re_refine")]
+    ReRefine,
+    /// Budget exhausted without resolution — surface the best attempt and force
+    /// stop_and_ask.
+    #[serde(rename = "escalate")]
+    Escalate,
+}
+
+impl std::fmt::Display for ArbiterVerdict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ArbiterVerdict::Accept => write!(f, "accept"),
+            ArbiterVerdict::ReRefine => write!(f, "re_refine"),
+            ArbiterVerdict::Escalate => write!(f, "escalate"),
+        }
+    }
+}
+
+/// The arbitrator's decision: which iteration to surface and why.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ArbiterDecision {
+    pub verdict: ArbiterVerdict,
+    /// Index into `RefinementTrace::iterations` chosen as the final result.
+    pub chosen_iteration: usize,
+    pub reasoning: String,
+}
+
+/// Summary of one propose→verify pass inside the refinement loop.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RefinementIteration {
+    pub iteration: usize,
+    pub confidence: f32,
+    pub passed: bool,
+    pub stop_and_ask: bool,
+    pub flag_count: usize,
+}
+
+/// The full refinement record — present only when the arbitrator loop ran.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RefinementTrace {
+    pub iterations: Vec<RefinementIteration>,
+    pub decision: ArbiterDecision,
+}
+
 /// Full pipeline output: telemetry + verification + step-level trace.
 /// `capability_request` is `None` unless the model emitted one alongside
 /// its telemetry (Phase 1 schema — no execution in this release).
@@ -244,4 +454,45 @@ pub struct HarnessResult {
     /// Present when the input required deobfuscation before Stage 1.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub obfuscation: Option<ObfuscationReport>,
+    /// Present when the active-reconciliation loop ran (arbitrator = rules).
+    /// Absent (skipped) when arbitrator = off or only a single pass ran.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub refinement: Option<RefinementTrace>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn risk_parses_canonical_values_case_insensitively() {
+        assert_eq!(Risk::from("low"), Risk::Low);
+        assert_eq!(Risk::from("HIGH"), Risk::High);
+        assert_eq!(Risk::from("  Medium "), Risk::Medium);
+    }
+
+    #[test]
+    fn risk_captures_unknown_values_instead_of_failing() {
+        let r = Risk::from("banana");
+        assert_eq!(r, Risk::Unknown("banana".into()));
+        assert!(!r.is_recognized());
+        assert!(Risk::Low.is_recognized());
+    }
+
+    #[test]
+    fn risk_deserialize_is_tolerant_and_round_trips() {
+        // A bad value must NOT fail the whole telemetry parse.
+        let r: Risk = serde_json::from_str("\"weird\"").unwrap();
+        assert_eq!(r, Risk::Unknown("weird".into()));
+        // Canonical values serialize back to the same lowercase strings.
+        assert_eq!(serde_json::to_string(&Risk::High).unwrap(), "\"high\"");
+        assert_eq!(serde_json::to_string(&r).unwrap(), "\"weird\"");
+    }
+
+    #[test]
+    fn intent_matrix_tolerates_unknown_risk() {
+        let json = r#"{"stated_objective":"o","subtextual_motive":"m","manipulation_risk":"nope"}"#;
+        let im: IntentMatrix = serde_json::from_str(json).unwrap();
+        assert_eq!(im.manipulation_risk, Risk::Unknown("nope".into()));
+    }
 }

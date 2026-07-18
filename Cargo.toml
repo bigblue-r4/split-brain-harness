@@ -9,6 +9,13 @@ keywords    = ["llm", "security", "ai-safety", "prompt-injection", "telemetry"]
 categories  = ["asynchronous", "network-programming", "web-programming"]
 readme      = "README.md"
 
+# v2 clean-core migration: incrementally carving leaf crates out of this package.
+# The root package stays the working crate; extracted crates live under crates/*
+# and are re-exported from src/lib.rs so existing `crate::<mod>` paths keep working.
+[workspace]
+members  = ["crates/*"]
+resolver = "2"
+
 [features]
 default     = ["serve"]
 serve       = ["dep:axum", "dep:axum-server"]
@@ -24,6 +31,12 @@ async-trait  = "0.1"
 anyhow       = "1.0"
 toml         = { version = "0.8", default-features = false, features = ["parse"] }
 base64       = "0.22"
+sbh-normalize = { path = "crates/sbh-normalize" }
+sbh-core      = { path = "crates/sbh-core" }
+sbh-store     = { path = "crates/sbh-store" }
+sbh-llm       = { path = "crates/sbh-llm" }
+sbh-safety    = { path = "crates/sbh-safety" }
+sbh-forge     = { path = "crates/sbh-forge" }
 axum         = { version = "0.7", features = ["json"], optional = true }
 axum-server  = { version = "0.7", features = ["tls-rustls"], optional = true }
 ratatui      = { version = "0.29", optional = true }
