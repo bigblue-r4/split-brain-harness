@@ -1203,6 +1203,7 @@ mod tests {
             capability_request: None,
             obfuscation: None,
             refinement: None,
+            tool_risk: None,
         };
         let s = summarize_result(&result);
         assert!(s.contains("neutral"));

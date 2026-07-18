@@ -1298,6 +1298,7 @@ fn demo_offline_result(idx: usize) -> HarnessResult {
             capability_request: None,
             obfuscation: None,
             refinement: None,
+            tool_risk: None,
         },
         // case 1 — direct prompt injection, system exfiltration
         1 => HarnessResult {
@@ -1331,6 +1332,7 @@ fn demo_offline_result(idx: usize) -> HarnessResult {
             capability_request: None,
             obfuscation: None,
             refinement: None,
+            tool_risk: None,
         },
         // case 2 — insider threat, access scoping
         2 => HarnessResult {
@@ -1364,6 +1366,7 @@ fn demo_offline_result(idx: usize) -> HarnessResult {
             capability_request: None,
             obfuscation: None,
             refinement: None,
+            tool_risk: None,
         },
         // case 3 — foreign adversary, authority impersonation
         3 => HarnessResult {
@@ -1398,6 +1401,7 @@ fn demo_offline_result(idx: usize) -> HarnessResult {
             capability_request: None,
             obfuscation: None,
             refinement: None,
+            tool_risk: None,
         },
         // case 4 — BEC via AI proxy, financial coercion
         _ => HarnessResult {
@@ -1432,6 +1436,7 @@ fn demo_offline_result(idx: usize) -> HarnessResult {
             capability_request: None,
             obfuscation: None,
             refinement: None,
+            tool_risk: None,
         },
     }
 }
@@ -1845,6 +1850,7 @@ fn demo_serve_offline_result(idx: usize) -> HarnessResult {
                 disagreement: Default::default(), stop_and_ask: false,
             },
             trace: vec![], capability_request: None, obfuscation: None, refinement: None,
+            tool_risk: None,
         },
         1 => HarnessResult {
             telemetry: TelemetryResult {
@@ -1866,6 +1872,7 @@ fn demo_serve_offline_result(idx: usize) -> HarnessResult {
                 disagreement: Default::default(), stop_and_ask: false,
             },
             trace: vec![], capability_request: None, obfuscation: None, refinement: None,
+            tool_risk: None,
         },
         2 => HarnessResult {
             telemetry: TelemetryResult {
@@ -1890,6 +1897,7 @@ fn demo_serve_offline_result(idx: usize) -> HarnessResult {
                 confidence: 0.74, disagreement: Default::default(), stop_and_ask: false,
             },
             trace: vec![], capability_request: None, obfuscation: None, refinement: None,
+            tool_risk: None,
         },
         3 => HarnessResult {
             telemetry: TelemetryResult {
@@ -1915,6 +1923,7 @@ fn demo_serve_offline_result(idx: usize) -> HarnessResult {
                 confidence: 0.14, disagreement: Default::default(), stop_and_ask: true,
             },
             trace: vec![], capability_request: None, obfuscation: None, refinement: None,
+            tool_risk: None,
         },
         _ => HarnessResult {
             telemetry: TelemetryResult {
@@ -1940,6 +1949,7 @@ fn demo_serve_offline_result(idx: usize) -> HarnessResult {
                 confidence: 0.11, disagreement: Default::default(), stop_and_ask: true,
             },
             trace: vec![], capability_request: None, obfuscation: None, refinement: None,
+            tool_risk: None,
         },
     }
 }

@@ -34,6 +34,7 @@ pub use sbh_normalize as normalizer;
 pub mod rag;
 #[cfg(feature = "serve")]
 pub mod serve;
+pub mod tool_risk;
 pub mod transformer;
 pub mod verifier;
 pub mod visualize;

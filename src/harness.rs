@@ -116,6 +116,22 @@ impl<'e> Harness<'e> {
             push_timing(&mut ctx.trace, "calibration", t.elapsed());
         }
 
+        // Tool-aware telemetry (phase C): deterministic classification of the
+        // input's tool surface, cross-checked against the model's capability_request.
+        let tr = crate::tool_risk::classify(&ctx.input, ctx.capability_request.as_ref());
+        let tool_risk = if tr.any() {
+            ctx.trace.push(TraceEntry {
+                stage: "tool-risk".into(),
+                claim: format!("intent touches tool surface: {}", tr.markers.join(", ")),
+                evidence: None,
+                passed: true,
+                note: Some(format!("sources: {}", tr.sources.join(", "))),
+            });
+            Some(tr)
+        } else {
+            None
+        };
+
         Ok(HarnessResult {
             telemetry: ctx
                 .telemetry
@@ -127,6 +143,7 @@ impl<'e> Harness<'e> {
             capability_request: ctx.capability_request,
             obfuscation: ctx.obfuscation,
             refinement: ctx.refinement,
+            tool_risk,
         })
     }
 

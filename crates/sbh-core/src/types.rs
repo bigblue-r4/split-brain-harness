@@ -313,6 +313,30 @@ pub struct TelemetryResult {
     pub cognitive_state: CognitiveState,
 }
 
+/// Tool-use risk of an input's intent (phase C). Derived **deterministically** —
+/// from input patterns cross-checked against the model's `capability_request` —
+/// never from the model's own self-report. Answers "would satisfying this intent
+/// touch code execution / the web / the filesystem / the network / a shell?".
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq)]
+pub struct ToolRisk {
+    pub code_execution: bool,
+    pub web_access: bool,
+    pub file_write: bool,
+    pub network: bool,
+    pub shell: bool,
+    /// How this was derived: "deterministic" (input patterns) and/or "capability_request".
+    pub sources: Vec<String>,
+    /// The specific markers that matched, for transparency.
+    pub markers: Vec<String>,
+}
+
+impl ToolRisk {
+    /// True if the intent touches any tool surface.
+    pub fn any(&self) -> bool {
+        self.code_execution || self.web_access || self.file_write || self.network || self.shell
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Verification layer
 // ---------------------------------------------------------------------------
@@ -458,6 +482,9 @@ pub struct HarnessResult {
     /// Absent (skipped) when arbitrator = off or only a single pass ran.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub refinement: Option<RefinementTrace>,
+    /// Present when the input's intent touches a tool surface (phase C).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub tool_risk: Option<ToolRisk>,
 }
 
 #[cfg(test)]

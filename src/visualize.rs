@@ -183,6 +183,28 @@ pub fn render_html(r: &HarnessResult) -> String {
         b.push_str("</div>");
     }
 
+    // Tool-use risk (phase C)
+    if let Some(ref tr) = r.tool_risk {
+        b.push_str("<div class=\"card\" style=\"margin-bottom:18px\"><h3>Tool-use risk</h3>");
+        for (label, on) in [
+            ("code execution", tr.code_execution),
+            ("web access", tr.web_access),
+            ("file write", tr.file_write),
+            ("network", tr.network),
+            ("shell", tr.shell),
+        ] {
+            b.push_str(&format!(
+                "<div class=\"kv\"><span class=\"k\">{label}</span><span class=\"v\">{}</span></div>",
+                if on { "⚠ yes" } else { "—" }
+            ));
+        }
+        b.push_str(&format!(
+            "<div class=\"kv\"><span class=\"k\">sources</span><span class=\"v\">{}</span></div>",
+            esc(&tr.sources.join(", "))
+        ));
+        b.push_str("</div>");
+    }
+
     // Flags
     b.push_str("<div class=\"card\" style=\"margin-bottom:18px\"><h3>Consistency flags</h3><div class=\"flags\">");
     if v.consistency_flags.is_empty() {
