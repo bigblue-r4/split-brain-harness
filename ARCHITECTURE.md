@@ -144,15 +144,19 @@ struct Telemetry     { … enrichment attaches here without deny_unknown_fields 
 `analyze()` becomes an ordered pipeline:
 
 ```
-Normalize → Propose → [Advocate?] → Verify → Arbitrate → Calibrate → Formal
+Normalize → Propose → Verify → Arbitrate → Calibrate → Formal → Advocate
 ```
 
 Each stage is independently testable, records its own **duration** (→ observability) and trace
-entries. The v1.5 refinement loop, `arbitrator`, and `calibration` become stages.
-`[Advocate?]` is a **reserved slot** (config-gated no-op now; impl lands in E). **Formal (F) is
-implemented** (`stage_formal`): it runs after the reconcile loop finalizes so it sees the chosen
-iteration's telemetry + tool surface and can escalate the final gate. It is a no-op unless
-`formal_rules_path` is configured.
+entries. The v1.5 refinement loop, `arbitrator`, and `calibration` become stages. **Formal (F)**
+and **Advocate (E)** are both **implemented** and run after the reconcile loop finalizes (so they
+see the chosen iteration's telemetry + tool surface and can escalate the final gate):
+
+- **Formal (F)** (`stage_formal`): deterministic predicate engine; no-op unless `formal_rules_path`
+  is configured.
+- **Advocate (E)** (`stage_advocate`): one gated adversarial LLM pass; no-op unless `advocate_mode`
+  is enabled and (for `high_stakes`) the deterministic gate fires. **Raise-only**: it can add
+  caution but never clear it.
 
 ### 4.4 Layered config
 
@@ -169,7 +173,7 @@ four duplicated `make_config`s.
 | **B** | Observability + timing + `sbh visualize` (HTML/SVG artifact) | **first** — instrument panel; generalize the `serve.rs` Prometheus renderer; **aggregates keyed by fingerprint**, no identifiable per-user series |
 | **C** | Tool-aware telemetry (`ToolRisk`) | classify **deterministically first** vs real `capability_request`; LLM only for the fuzz — never trust model self-report as ground truth |
 | **D** | HITL weight-tuning (`sbh tune-weights`) | extends A5 store; **advisory → reviewed → applied**, never live; poisoning-guarded |
-| **E** *(reserved)* | Debate / Devil's Advocate | fills the `Advocate` slot; reuses `ArbitratorMode::Llm` (stubbed) + `run_reconcile`; needs N-opinion arbitrator + high-stakes gate |
+| **E** ✅ *(shipped, E.1)* | Debate / Devil's Advocate (`src/advocate.rs`) | gated adversarial LLM pass (`advocate_mode` = off/high_stakes/always, `SBH_ADVOCATE`); reuses `run_reconcile` template + a `[ADVOCATE_SYSTEM_PROMPT]` soul section; deterministic high-stakes gate (risk / tool surface / capability request); **raise-only** guardrail (can't self-whitelist); dissent → flag + stop_and_ask + `advocate:dissent` fired-check; transient failure is advisory (not fail-closed); `sbh_advocate_dissent_total` metric. **E.2 (deferred):** global LLM-call ceiling `max_llm_calls_per_request` + `sbh_llm_calls_total` |
 | **F** ✅ *(shipped)* | Formal-ish verification (`sbh formal-check`) | deterministic facts-extractor + TOML predicate engine (`src/formal.rs`); `formal_rules_path` config, `SBH_FORMAL_RULES` env; no-op unless configured; high-severity violations force stop_and_ask; fails **closed** on bad rule files; starter domain `rules/credential-egress.toml` |
 | **G** *(reserved)* | Meta-cognitive analyzer | **offline `sbh introspect` only**; self-modifying runtime mode is a no-go |
 

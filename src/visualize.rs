@@ -239,6 +239,31 @@ pub fn render_html(r: &HarnessResult) -> String {
         b.push_str("</div>");
     }
 
+    // Advocate (phase E)
+    if let Some(ref a) = r.advocate {
+        b.push_str("<div class=\"card\" style=\"margin-bottom:18px\"><h3>Devil's Advocate</h3>");
+        b.push_str(&format!(
+            "<div class=\"kv\"><span class=\"k\">verdict</span><span class=\"v\">{}{}</span></div>",
+            esc(&a.verdict),
+            if a.dissented { " ⚠ DISSENT" } else { "" }
+        ));
+        b.push_str(&format!(
+            "<div class=\"kv\"><span class=\"k\">confidence</span><span class=\"v\">{:.2}</span></div>",
+            a.confidence
+        ));
+        b.push_str(&format!(
+            "<div class=\"kv\"><span class=\"k\">gate</span><span class=\"v\">{}</span></div>",
+            esc(&a.gate_reason.join(", "))
+        ));
+        if !a.argument.is_empty() {
+            b.push_str(&format!(
+                "<div class=\"kv\"><span class=\"k\">argument</span><span class=\"v\">{}</span></div>",
+                esc(&a.argument)
+            ));
+        }
+        b.push_str("</div>");
+    }
+
     // Flags
     b.push_str("<div class=\"card\" style=\"margin-bottom:18px\"><h3>Consistency flags</h3><div class=\"flags\">");
     if v.consistency_flags.is_empty() {
