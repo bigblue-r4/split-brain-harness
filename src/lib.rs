@@ -27,6 +27,7 @@ pub mod arbitrator;
 pub mod config;
 pub use config::validate_config;
 pub mod context_packs;
+pub mod formal;
 pub mod harness;
 // v2: extracted to the sbh-normalize crate; re-exported so `crate::normalizer`
 // and `split_brain_harness::normalizer` keep resolving unchanged.

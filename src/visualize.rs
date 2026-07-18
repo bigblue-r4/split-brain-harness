@@ -209,6 +209,36 @@ pub fn render_html(r: &HarnessResult) -> String {
         b.push_str("</div>");
     }
 
+    // Formal (phase F)
+    if let Some(ref f) = r.formal {
+        b.push_str("<div class=\"card\" style=\"margin-bottom:18px\"><h3>Formal checks</h3>");
+        b.push_str(&format!(
+            "<div class=\"kv\"><span class=\"k\">domains</span><span class=\"v\">{}</span></div>",
+            esc(&f.domains.join(", "))
+        ));
+        b.push_str(&format!(
+            "<div class=\"kv\"><span class=\"k\">rules evaluated</span><span class=\"v\">{}</span></div>",
+            f.checked.len()
+        ));
+        b.push_str(&format!(
+            "<div class=\"kv\"><span class=\"k\">result</span><span class=\"v\">{}</span></div>",
+            if f.passed {
+                "✓ pass".to_string()
+            } else {
+                format!("⚠ {} violation(s)", f.violations.len())
+            }
+        ));
+        for viol in &f.violations {
+            b.push_str(&format!(
+                "<div class=\"kv\"><span class=\"k\">[{}] {}</span><span class=\"v\">{}</span></div>",
+                esc(viol.severity.as_str()),
+                esc(&viol.rule_id),
+                esc(&viol.message)
+            ));
+        }
+        b.push_str("</div>");
+    }
+
     // Flags
     b.push_str("<div class=\"card\" style=\"margin-bottom:18px\"><h3>Consistency flags</h3><div class=\"flags\">");
     if v.consistency_flags.is_empty() {

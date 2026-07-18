@@ -24,6 +24,7 @@ struct FileConfig {
     stop_and_ask_threshold: Option<f32>,
     calibration_path: Option<String>,
     request_rationale: Option<bool>,
+    formal_rules_path: Option<String>,
 }
 
 fn load_file_config() -> FileConfig {
@@ -174,6 +175,9 @@ pub fn build_config() -> Config {
             })
             .or(file.request_rationale)
             .unwrap_or(false),
+        formal_rules_path: std::env::var("SBH_FORMAL_RULES")
+            .ok()
+            .or(file.formal_rules_path),
     }
 }
 

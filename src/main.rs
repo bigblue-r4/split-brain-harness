@@ -30,6 +30,7 @@ async fn main() -> Result<()> {
             | Command::Feedback { .. }
             | Command::Visualize { .. }
             | Command::TuneWeights { .. }
+            | Command::FormalCheck { .. }
     );
     // --dump-prompt exits before any model call, so skip validation there too.
     let is_dump = matches!(
@@ -120,6 +121,7 @@ async fn main() -> Result<()> {
         }
         Command::Visualize { input, output } => cmd_visualize(input.as_deref(), output.as_deref()),
         Command::TuneWeights { store } => cmd_tune_weights(&config, store.as_deref()),
+        Command::FormalCheck { rules, input } => cmd_formal_check(&rules, input.as_deref()),
         Command::Calibrate { store } => cmd_calibrate(&config, store.as_deref()),
         Command::Feedback {
             fingerprint,
@@ -193,6 +195,11 @@ enum Command {
     },
     TuneWeights {
         store: Option<String>,
+    },
+    /// Offline: lint Formal rule files and (optionally) dry-run them against an input.
+    FormalCheck {
+        rules: String,
+        input: Option<String>,
     },
 }
 
@@ -276,6 +283,18 @@ fn parse_command(args: &[String]) -> Result<Command> {
         Some("tune-weights") => {
             let store = flag_value(args, "--store");
             return Ok(Command::TuneWeights { store });
+        }
+        Some("formal-check") => {
+            // rules: a .toml file or directory (positional, required).
+            // input: optional text to dry-run the rules against.
+            let rules = positional.get(1).map(|s| s.to_string()).ok_or_else(|| {
+                anyhow!(
+                    "formal-check requires a rules path\n\
+                     Usage: split-brain-harness formal-check <rules.toml|dir> [\"input text\"]"
+                )
+            })?;
+            let input = positional.get(2).map(|s| s.to_string());
+            return Ok(Command::FormalCheck { rules, input });
         }
         Some("calibrate") => {
             let store = flag_value(args, "--store");
@@ -437,7 +456,8 @@ fn parse_command(args: &[String]) -> Result<Command> {
              Usage: split-brain-harness calibrate [--store <path>]\n\
              Usage: split-brain-harness tune-weights [--store <path>]\n\
              Usage: split-brain-harness feedback --fingerprint <fp> (--correct | --misread) [--store <path>]\n\
-             Usage: split-brain-harness visualize [<trace.json>] [--output <out.html>]   (or pipe `analyze --raw`)"
+             Usage: split-brain-harness visualize [<trace.json>] [--output <out.html>]   (or pipe `analyze --raw`)\n\
+             Usage: split-brain-harness formal-check <rules.toml|dir> [\"input text\"]"
         ));
     }
 
@@ -979,6 +999,77 @@ fn cmd_tune_weights(
     Ok(())
 }
 
+/// Offline: lint Formal rule domains and optionally dry-run them against an
+/// input. The dry-run builds deterministic facts from the input alone (no LLM):
+/// the input text plus its tool surface — enough to exercise most rules.
+fn cmd_formal_check(rules: &str, input: Option<&str>) -> Result<()> {
+    use split_brain_harness::types::{
+        AfferentTelemetry, CognitiveState, IntentMatrix, Risk, TelemetryResult,
+    };
+    use split_brain_harness::{formal, tool_risk};
+
+    let domains = formal::load_domains(rules)?;
+    let rule_count: usize = domains.iter().map(|d| d.rules.len()).sum();
+    println!(
+        "loaded {} domain(s), {} rule(s) from {rules}  — all valid",
+        domains.len(),
+        rule_count
+    );
+    for d in &domains {
+        println!("  domain {:<22} {} rule(s)", d.domain, d.rules.len());
+    }
+
+    let Some(text) = input else {
+        println!("\n(no input given — validation only. Pass an input string to dry-run.)");
+        return Ok(());
+    };
+
+    // Deterministic facts from the input alone: stated intent = the input, plus
+    // the tool surface. subtextual/risk are left neutral for an offline dry-run.
+    let tr = tool_risk::classify(text, None);
+    let telemetry = TelemetryResult {
+        affective_telemetry: AfferentTelemetry {
+            primary_emotion: "neutral".into(),
+            emotional_intensity: 0.0,
+            structural_tone: vec![],
+        },
+        intent_matrix: IntentMatrix {
+            stated_objective: text.to_string(),
+            subtextual_motive: String::new(),
+            manipulation_risk: Risk::Unknown("n/a".into()),
+        },
+        cognitive_state: CognitiveState {
+            urgency_vector: 0.0,
+            coherence_rating: 1.0,
+        },
+    };
+    let report = formal::evaluate(text, &telemetry, None, tr.any().then_some(&tr), &domains);
+
+    println!("\ndry-run against: {text:?}");
+    match report {
+        None => println!("  no rule triggered (stage would be a no-op for this input)."),
+        Some(r) => {
+            println!(
+                "  {} rule(s) evaluated across [{}]",
+                r.checked.len(),
+                r.domains.join(", ")
+            );
+            if r.passed {
+                println!("  PASS — no violations.");
+            } else {
+                println!("  {} VIOLATION(S):", r.violations.len());
+                for v in &r.violations {
+                    println!("    [{}] {} — {}", v.severity, v.rule_id, v.message);
+                }
+                if r.has_high_severity() {
+                    println!("  → a high-severity violation here would force stop_and_ask.");
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn cmd_calibrate(config: &split_brain_harness::types::Config, store: Option<&str>) -> Result<()> {
     use split_brain_harness::calibration;
     let path = resolve_store(config, store)?;
@@ -1349,6 +1440,7 @@ fn demo_offline_result(idx: usize) -> HarnessResult {
             obfuscation: None,
             refinement: None,
             tool_risk: None,
+            formal: None,
         },
         // case 1 — direct prompt injection, system exfiltration
         1 => HarnessResult {
@@ -1384,6 +1476,7 @@ fn demo_offline_result(idx: usize) -> HarnessResult {
             obfuscation: None,
             refinement: None,
             tool_risk: None,
+            formal: None,
         },
         // case 2 — insider threat, access scoping
         2 => HarnessResult {
@@ -1419,6 +1512,7 @@ fn demo_offline_result(idx: usize) -> HarnessResult {
             obfuscation: None,
             refinement: None,
             tool_risk: None,
+            formal: None,
         },
         // case 3 — foreign adversary, authority impersonation
         3 => HarnessResult {
@@ -1455,6 +1549,7 @@ fn demo_offline_result(idx: usize) -> HarnessResult {
             obfuscation: None,
             refinement: None,
             tool_risk: None,
+            formal: None,
         },
         // case 4 — BEC via AI proxy, financial coercion
         _ => HarnessResult {
@@ -1491,6 +1586,7 @@ fn demo_offline_result(idx: usize) -> HarnessResult {
             obfuscation: None,
             refinement: None,
             tool_risk: None,
+            formal: None,
         },
     }
 }
@@ -1906,6 +2002,7 @@ fn demo_serve_offline_result(idx: usize) -> HarnessResult {
             },
             trace: vec![], capability_request: None, obfuscation: None, refinement: None,
             tool_risk: None,
+            formal: None,
         },
         1 => HarnessResult {
             telemetry: TelemetryResult {
@@ -1929,6 +2026,7 @@ fn demo_serve_offline_result(idx: usize) -> HarnessResult {
             },
             trace: vec![], capability_request: None, obfuscation: None, refinement: None,
             tool_risk: None,
+            formal: None,
         },
         2 => HarnessResult {
             telemetry: TelemetryResult {
@@ -1955,6 +2053,7 @@ fn demo_serve_offline_result(idx: usize) -> HarnessResult {
             },
             trace: vec![], capability_request: None, obfuscation: None, refinement: None,
             tool_risk: None,
+            formal: None,
         },
         3 => HarnessResult {
             telemetry: TelemetryResult {
@@ -1982,6 +2081,7 @@ fn demo_serve_offline_result(idx: usize) -> HarnessResult {
             },
             trace: vec![], capability_request: None, obfuscation: None, refinement: None,
             tool_risk: None,
+            formal: None,
         },
         _ => HarnessResult {
             telemetry: TelemetryResult {
@@ -2009,6 +2109,7 @@ fn demo_serve_offline_result(idx: usize) -> HarnessResult {
             },
             trace: vec![], capability_request: None, obfuscation: None, refinement: None,
             tool_risk: None,
+            formal: None,
         },
     }
 }

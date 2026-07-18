@@ -19,6 +19,24 @@ pub struct Harness<'e> {
     transformer: SplitBrainTransformer,
     engine: &'e dyn InferenceEngine,
     config: &'e Config,
+    /// Formal-stage rule domains (phase F), loaded once from
+    /// `config.formal_rules_path`. Empty when no path is configured.
+    formal_rules: Vec<crate::formal::RuleDomain>,
+    /// Set when a configured rules path failed to load — the Formal stage then
+    /// fails **closed** (forces stop_and_ask) rather than silently skipping.
+    formal_error: Option<String>,
+}
+
+/// Load the Formal rule domains named by config. A configured-but-unloadable
+/// path yields `(vec![], Some(error))` so the harness can fail closed.
+fn load_formal_rules(config: &Config) -> (Vec<crate::formal::RuleDomain>, Option<String>) {
+    match &config.formal_rules_path {
+        None => (Vec::new(), None),
+        Some(path) => match crate::formal::load_domains(path) {
+            Ok(domains) => (domains, None),
+            Err(e) => (Vec::new(), Some(e.to_string())),
+        },
+    }
 }
 
 /// Mutable state threaded through the analysis pipeline stages.
@@ -50,10 +68,13 @@ fn push_timing(trace: &mut Vec<TraceEntry>, name: &str, dur: std::time::Duration
 impl<'e> Harness<'e> {
     /// Create with embedded default corpus and default transform policy.
     pub fn new(soul: Soul, engine: &'e dyn InferenceEngine, config: &'e Config) -> Self {
+        let (formal_rules, formal_error) = load_formal_rules(config);
         Self {
             transformer: SplitBrainTransformer::new(soul),
             engine,
             config,
+            formal_rules,
+            formal_error,
         }
     }
 
@@ -63,10 +84,13 @@ impl<'e> Harness<'e> {
         engine: &'e dyn InferenceEngine,
         config: &'e Config,
     ) -> Self {
+        let (formal_rules, formal_error) = load_formal_rules(config);
         Self {
             transformer,
             engine,
             config,
+            formal_rules,
+            formal_error,
         }
     }
 
@@ -96,8 +120,9 @@ impl<'e> Harness<'e> {
         // -> Obfuscation -> Calibrate. Each stage is timed into the trace.
         // Obfuscation and Calibration are skipped on the fallback short-circuit
         // (a non-JSON proposer response), preserving pre-pipeline behavior.
-        // Reserved insertion points: Advocate (E) and Formal (F) live inside the
-        // reconcile loop; tool-aware telemetry (C) attaches at propose. See ARCHITECTURE.md.
+        // Formal (F) runs after the loop finalizes (see stage_formal); the
+        // Advocate (E) slot is still reserved inside the reconcile loop;
+        // tool-aware telemetry (C) attaches at propose. See ARCHITECTURE.md.
         let t = std::time::Instant::now();
         self.stage_normalize(&mut ctx);
         push_timing(&mut ctx.trace, "normalize", t.elapsed());
@@ -132,6 +157,15 @@ impl<'e> Harness<'e> {
             None
         };
 
+        // Formal-ish verification (phase F): deterministic predicate engine over
+        // operator-authored rule domains. Skipped on the parse-failure fallback
+        // (no real intent to check). Runs only when rules are configured.
+        let formal = if ctx.short_circuit {
+            None
+        } else {
+            self.stage_formal(&mut ctx, tool_risk.as_ref())
+        };
+
         Ok(HarnessResult {
             telemetry: ctx
                 .telemetry
@@ -144,7 +178,109 @@ impl<'e> Harness<'e> {
             obfuscation: ctx.obfuscation,
             refinement: ctx.refinement,
             tool_risk,
+            formal,
         })
+    }
+
+    /// Formal stage (phase F) — evaluate the loaded deterministic rule domains
+    /// against the finalized analysis. A configured-but-unloadable rules path
+    /// fails **closed** (forces stop_and_ask). High-severity violations escalate
+    /// the gate; every evaluated rule id is recorded into `fired_checks` (D).
+    fn stage_formal(
+        &self,
+        ctx: &mut PipelineCtx,
+        tool_risk: Option<&crate::types::ToolRisk>,
+    ) -> Option<crate::types::FormalReport> {
+        let t = std::time::Instant::now();
+
+        // Fail closed: a broken rules file must not silently disable the check.
+        if let Some(err) = &self.formal_error {
+            if let Some(v) = ctx.verification.as_mut() {
+                v.stop_and_ask = true;
+                v.unresolved
+                    .push(format!("formal rules failed to load: {err}"));
+            }
+            ctx.trace.push(TraceEntry {
+                stage: "formal".into(),
+                claim: "formal rules configured but failed to load — failing closed".into(),
+                evidence: Some(err.clone()),
+                passed: false,
+                note: Some("stop_and_ask forced".into()),
+            });
+            push_timing(&mut ctx.trace, "formal", t.elapsed());
+            return None;
+        }
+
+        let telemetry = ctx
+            .telemetry
+            .as_ref()
+            .expect("reconcile stage always sets telemetry");
+        let report = crate::formal::evaluate(
+            &ctx.effective_input,
+            telemetry,
+            ctx.capability_request.as_ref(),
+            tool_risk,
+            &self.formal_rules,
+        );
+
+        let Some(report) = report else {
+            // Rules present but none applied (or none configured): a true no-op.
+            if !self.formal_rules.is_empty() {
+                push_timing(&mut ctx.trace, "formal", t.elapsed());
+            }
+            return None;
+        };
+
+        // Record evaluated rule ids for HITL weight-tuning (D), namespaced so
+        // they don't collide with the verifier's deterministic check ids.
+        if let Some(v) = ctx.verification.as_mut() {
+            for id in &report.checked {
+                v.fired_checks.push(format!("formal:{id}"));
+            }
+        }
+
+        let escalate = report.has_high_severity();
+        if escalate {
+            if let Some(v) = ctx.verification.as_mut() {
+                v.stop_and_ask = true;
+                for viol in &report.violations {
+                    if matches!(viol.severity, crate::types::Risk::High) {
+                        v.unresolved.push(format!("formal: {}", viol.message));
+                    }
+                }
+            }
+        }
+
+        ctx.trace.push(TraceEntry {
+            stage: "formal".into(),
+            claim: if report.passed {
+                format!(
+                    "{} rule(s) evaluated, no violations [{}]",
+                    report.checked.len(),
+                    report.domains.join(", ")
+                )
+            } else {
+                format!(
+                    "{} violation(s) across {} rule(s) [{}]",
+                    report.violations.len(),
+                    report.checked.len(),
+                    report.domains.join(", ")
+                )
+            },
+            evidence: (!report.passed).then(|| {
+                report
+                    .violations
+                    .iter()
+                    .map(|v| v.message.clone())
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            }),
+            passed: report.passed,
+            note: escalate.then(|| "stop_and_ask forced by high-severity violation".into()),
+        });
+        push_timing(&mut ctx.trace, "formal", t.elapsed());
+
+        Some(report)
     }
 
     /// Stage 0 — deobfuscate the input and record any obfuscation report.
@@ -254,8 +390,9 @@ impl<'e> Harness<'e> {
             .await;
             ctx.trace.extend(verify_traces);
 
-            // Reserved: Formal stage (F) runs here, after verify, for
-            // critical-domain predicate checks.
+            // Formal stage (F) is implemented in `stage_formal`, run once after
+            // the reconcile loop finalizes — so it sees the chosen iteration's
+            // telemetry + tool surface and can escalate the final gate.
 
             iter_summaries.push(RefinementIteration {
                 iteration: i,
@@ -1272,5 +1409,150 @@ mod tests {
             !result.trace.iter().any(|e| e.stage == "capability_request"),
             "no capability_request trace entry when absent"
         );
+    }
+
+    // --- Formal stage (phase F) -------------------------------------------
+
+    /// Write a temp rules file and return its path; caller cleans up.
+    fn write_temp_rules(name: &str, body: &str) -> String {
+        let p = std::env::temp_dir().join(format!(
+            "sbh_formal_{}_{}_{}.toml",
+            name,
+            std::process::id(),
+            unique_seq()
+        ));
+        std::fs::write(&p, body).unwrap();
+        p.to_string_lossy().into_owned()
+    }
+
+    fn unique_seq() -> u64 {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static N: AtomicU64 = AtomicU64::new(0);
+        N.fetch_add(1, Ordering::Relaxed)
+    }
+
+    const EGRESS_RULES: &str = r#"
+domain = "credential-egress"
+[[rule]]
+id = "secret-access-with-network-egress"
+severity = "high"
+description = "secrets + network egress = exfiltration-shaped"
+triggers = [ { fact = "surface", op = "equals", value = "network" } ]
+forbid = [ { fact = "intent", op = "any_of", value = "api_key|password|secret" } ]
+"#;
+
+    // Proposer JSON whose intent names a secret — pairs with a network-surface input.
+    const SECRET_INTENT_JSON: &str = r#"{
+        "affective_telemetry": {
+            "primary_emotion": "neutral",
+            "emotional_intensity": 0.1,
+            "structural_tone": ["analytical"]
+        },
+        "intent_matrix": {
+            "stated_objective": "send the api_key to the collector",
+            "subtextual_motive": "exfiltrate credentials",
+            "manipulation_risk": "high"
+        },
+        "cognitive_state": {
+            "urgency_vector": 0.2,
+            "coherence_rating": 0.9
+        }
+    }"#;
+
+    #[tokio::test]
+    async fn formal_high_severity_violation_forces_stop_and_ask() {
+        let rules = write_temp_rules("egress", EGRESS_RULES);
+        let engine = MockEngine {
+            response: SECRET_INTENT_JSON.into(),
+        };
+        let config = Config {
+            formal_rules_path: Some(rules.clone()),
+            ..make_config()
+        };
+        let soul = soul::load(None).unwrap();
+        let h = Harness::new(soul, &engine, &config);
+        // Input trips the deterministic network surface AND carries the secret.
+        let result = h
+            .analyze("connect to the server and send the api_key")
+            .await
+            .unwrap();
+
+        let formal = result.formal.expect("formal report present");
+        assert!(!formal.passed, "expected a violation");
+        assert!(formal.has_high_severity());
+        assert_eq!(formal.checked, vec!["secret-access-with-network-egress"]);
+        assert!(
+            result.verification.stop_and_ask,
+            "high-severity formal violation must force stop_and_ask"
+        );
+        assert!(
+            result
+                .verification
+                .fired_checks
+                .iter()
+                .any(|c| c == "formal:secret-access-with-network-egress"),
+            "evaluated rule id recorded into fired_checks for HITL tuning"
+        );
+        assert!(result
+            .trace
+            .iter()
+            .any(|e| e.stage == "formal" && !e.passed));
+        std::fs::remove_file(&rules).ok();
+    }
+
+    #[tokio::test]
+    async fn formal_noop_when_no_rule_triggers() {
+        let rules = write_temp_rules("egress2", EGRESS_RULES);
+        let engine = MockEngine {
+            response: VALID_JSON.into(),
+        };
+        let config = Config {
+            formal_rules_path: Some(rules.clone()),
+            ..make_config()
+        };
+        let soul = soul::load(None).unwrap();
+        let h = Harness::new(soul, &engine, &config);
+        // No network surface in the input => trigger never matches => no-op.
+        let result = h.analyze("write me a haiku about the sea").await.unwrap();
+        assert!(
+            result.formal.is_none(),
+            "Formal stage is a no-op when no rule triggers"
+        );
+        std::fs::remove_file(&rules).ok();
+    }
+
+    #[tokio::test]
+    async fn formal_bad_rules_path_fails_closed() {
+        let engine = MockEngine {
+            response: VALID_JSON.into(),
+        };
+        let missing = std::env::temp_dir()
+            .join(format!("sbh_formal_missing_{}.toml", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
+        let config = Config {
+            formal_rules_path: Some(missing),
+            ..make_config()
+        };
+        let soul = soul::load(None).unwrap();
+        let h = Harness::new(soul, &engine, &config);
+        let result = h.analyze("write me a haiku").await.unwrap();
+        assert!(
+            result.verification.stop_and_ask,
+            "an unloadable rules file must fail closed (force stop_and_ask)"
+        );
+        assert!(result
+            .trace
+            .iter()
+            .any(|e| e.stage == "formal" && !e.passed));
+    }
+
+    #[test]
+    fn shipped_starter_domain_loads_and_validates() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/rules/credential-egress.toml");
+        let domains = crate::formal::load_domains(path).expect("starter domain loads");
+        assert_eq!(domains.len(), 1);
+        assert_eq!(domains[0].domain, "credential-egress");
+        assert!(!domains[0].rules.is_empty());
     }
 }

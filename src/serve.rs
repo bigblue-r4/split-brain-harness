@@ -324,6 +324,8 @@ pub struct Metrics {
     pub stop_and_ask_total: AtomicU64,
     /// Sum of refinement iterations across analyses (avg = / requests_ok).
     pub refinement_iterations_total: AtomicU64,
+    /// Formal-stage violations raised across analyses (phase F).
+    pub formal_violations_total: AtomicU64,
 }
 
 impl Metrics {
@@ -387,6 +389,12 @@ impl Metrics {
                 "counter",
                 "Sum of refinement iterations (avg = / requests_ok_total)",
                 self.refinement_iterations_total.load(Ordering::Relaxed),
+            ),
+            (
+                "sbh_formal_violations_total",
+                "counter",
+                "Formal-stage predicate violations raised (phase F)",
+                self.formal_violations_total.load(Ordering::Relaxed),
             ),
             (
                 "sbh_active_sessions",
@@ -603,6 +611,12 @@ async fn chat_completions(
             .metrics
             .refinement_iterations_total
             .fetch_add(rf.iterations.len() as u64, Ordering::Relaxed);
+    }
+    if let Some(ref f) = result.formal {
+        state
+            .metrics
+            .formal_violations_total
+            .fetch_add(f.violations.len() as u64, Ordering::Relaxed);
     }
 
     // --- session tracking: push turn, check for escalation, evict stale ---
@@ -1049,8 +1063,8 @@ mod tests {
         let out = m.render(0, 0);
         let help_count = out.lines().filter(|l| l.starts_with("# HELP")).count();
         let type_count = out.lines().filter(|l| l.starts_with("# TYPE")).count();
-        assert_eq!(help_count, 11, "expected 11 # HELP lines");
-        assert_eq!(type_count, 11, "expected 11 # TYPE lines");
+        assert_eq!(help_count, 12, "expected 12 # HELP lines");
+        assert_eq!(type_count, 12, "expected 12 # TYPE lines");
     }
 
     // --- url_encode ---
@@ -1205,6 +1219,7 @@ mod tests {
             obfuscation: None,
             refinement: None,
             tool_risk: None,
+            formal: None,
         };
         let s = summarize_result(&result);
         assert!(s.contains("neutral"));
