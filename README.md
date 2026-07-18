@@ -22,6 +22,24 @@ Stage 0 normalizer components are available as standalone crates:
 
 ---
 
+## Contents
+
+- [Quick demo (no backend required)](#quick-demo-no-backend-required)
+- [What it does](#what-it-does)
+- [Subcommands](#subcommands)
+- [Quick start](#quick-start)
+- [Output schema](#output-schema)
+- [CLI reference](#cli-reference)
+- [Context corpus (RAG layer)](#context-corpus-rag-layer)
+- [Benchmark results](#benchmark-results)
+- [Backends](#backends)
+- [Configuration](#configuration)
+- [Library usage](#library-usage)
+- [Custom soul](#custom-soul)
+- [HTTPS deployment](#https-deployment)
+- [Building](#building)
+- [License](#license)
+
 ## Quick demo (no backend required)
 
 ```bash
