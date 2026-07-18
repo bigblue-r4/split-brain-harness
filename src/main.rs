@@ -28,6 +28,7 @@ async fn main() -> Result<()> {
             | Command::ExportOllama { .. }
             | Command::Calibrate { .. }
             | Command::Feedback { .. }
+            | Command::Visualize { .. }
     );
     // --dump-prompt exits before any model call, so skip validation there too.
     let is_dump = matches!(
@@ -116,6 +117,7 @@ async fn main() -> Result<()> {
             )
             .await
         }
+        Command::Visualize { input, output } => cmd_visualize(input.as_deref(), output.as_deref()),
         Command::Calibrate { store } => cmd_calibrate(&config, store.as_deref()),
         Command::Feedback {
             fingerprint,
@@ -182,6 +184,10 @@ enum Command {
         fingerprint: String,
         correct: bool,
         store: Option<String>,
+    },
+    Visualize {
+        input: Option<String>,
+        output: Option<String>,
     },
 }
 
@@ -255,6 +261,12 @@ fn parse_command(args: &[String]) -> Result<Command> {
             let tail = flag_value(args, "--tail").and_then(|s| s.parse().ok());
             let since = flag_value(args, "--since");
             return Ok(Command::Audit { tail, since });
+        }
+        Some("visualize") => {
+            // input: a trace JSON file (positional), or stdin when omitted.
+            let input = positional.get(1).map(|s| s.to_string());
+            let output = flag_value(args, "--output");
+            return Ok(Command::Visualize { input, output });
         }
         Some("calibrate") => {
             let store = flag_value(args, "--store");
@@ -414,7 +426,8 @@ fn parse_command(args: &[String]) -> Result<Command> {
              Usage: split-brain-harness serve [--listen <addr>] [--session-log <path>] [--tls-cert <pem>] [--tls-key <pem>]\n\
              Usage: split-brain-harness bench <file.jsonl> [--baseline <prev.jsonl>] [--output <out.jsonl>] [--fail-on-regression]\n\
              Usage: split-brain-harness calibrate [--store <path>]\n\
-             Usage: split-brain-harness feedback --fingerprint <fp> (--correct | --misread) [--store <path>]"
+             Usage: split-brain-harness feedback --fingerprint <fp> (--correct | --misread) [--store <path>]\n\
+             Usage: split-brain-harness visualize [<trace.json>] [--output <out.html>]   (or pipe `analyze --raw`)"
         ));
     }
 
@@ -872,6 +885,38 @@ fn cmd_audit(
 // ---------------------------------------------------------------------------
 // calibrate / feedback (confidence calibration — A5)
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// visualize (offline — render a trace as self-contained HTML)
+// ---------------------------------------------------------------------------
+
+fn cmd_visualize(input: Option<&str>, output: Option<&str>) -> Result<()> {
+    use std::io::Read;
+    let json = match input {
+        Some(path) => std::fs::read_to_string(path)
+            .map_err(|e| anyhow!("cannot read trace file {path}: {e}"))?,
+        None => {
+            let mut s = String::new();
+            std::io::stdin().read_to_string(&mut s)?;
+            s
+        }
+    };
+    let result: split_brain_harness::types::HarnessResult = serde_json::from_str(json.trim())
+        .map_err(|e| {
+            anyhow!(
+                "input is not a HarnessResult JSON — pipe `analyze --raw` or `--trace` output: {e}"
+            )
+        })?;
+    let html = split_brain_harness::visualize::render_html(&result);
+    match output {
+        Some(path) => {
+            std::fs::write(path, &html).map_err(|e| anyhow!("cannot write {path}: {e}"))?;
+            eprintln!("wrote {path} ({} bytes)", html.len());
+        }
+        None => println!("{html}"),
+    }
+    Ok(())
+}
 
 fn resolve_store(
     config: &split_brain_harness::types::Config,

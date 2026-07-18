@@ -36,6 +36,7 @@ pub mod rag;
 pub mod serve;
 pub mod transformer;
 pub mod verifier;
+pub mod visualize;
 
 use anyhow::Result;
 use types::{Config, HarnessResult};
