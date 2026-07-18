@@ -1442,6 +1442,7 @@ fn demo_offline_result(idx: usize) -> HarnessResult {
             tool_risk: None,
             formal: None,
             advocate: None,
+            llm_calls: 0,
         },
         // case 1 — direct prompt injection, system exfiltration
         1 => HarnessResult {
@@ -1479,6 +1480,7 @@ fn demo_offline_result(idx: usize) -> HarnessResult {
             tool_risk: None,
             formal: None,
             advocate: None,
+            llm_calls: 0,
         },
         // case 2 — insider threat, access scoping
         2 => HarnessResult {
@@ -1516,6 +1518,7 @@ fn demo_offline_result(idx: usize) -> HarnessResult {
             tool_risk: None,
             formal: None,
             advocate: None,
+            llm_calls: 0,
         },
         // case 3 — foreign adversary, authority impersonation
         3 => HarnessResult {
@@ -1554,6 +1557,7 @@ fn demo_offline_result(idx: usize) -> HarnessResult {
             tool_risk: None,
             formal: None,
             advocate: None,
+            llm_calls: 0,
         },
         // case 4 — BEC via AI proxy, financial coercion
         _ => HarnessResult {
@@ -1592,6 +1596,7 @@ fn demo_offline_result(idx: usize) -> HarnessResult {
             tool_risk: None,
             formal: None,
             advocate: None,
+            llm_calls: 0,
         },
     }
 }
@@ -2009,6 +2014,7 @@ fn demo_serve_offline_result(idx: usize) -> HarnessResult {
             tool_risk: None,
             formal: None,
             advocate: None,
+            llm_calls: 0,
         },
         1 => HarnessResult {
             telemetry: TelemetryResult {
@@ -2034,6 +2040,7 @@ fn demo_serve_offline_result(idx: usize) -> HarnessResult {
             tool_risk: None,
             formal: None,
             advocate: None,
+            llm_calls: 0,
         },
         2 => HarnessResult {
             telemetry: TelemetryResult {
@@ -2062,6 +2069,7 @@ fn demo_serve_offline_result(idx: usize) -> HarnessResult {
             tool_risk: None,
             formal: None,
             advocate: None,
+            llm_calls: 0,
         },
         3 => HarnessResult {
             telemetry: TelemetryResult {
@@ -2091,6 +2099,7 @@ fn demo_serve_offline_result(idx: usize) -> HarnessResult {
             tool_risk: None,
             formal: None,
             advocate: None,
+            llm_calls: 0,
         },
         _ => HarnessResult {
             telemetry: TelemetryResult {
@@ -2120,6 +2129,7 @@ fn demo_serve_offline_result(idx: usize) -> HarnessResult {
             tool_risk: None,
             formal: None,
             advocate: None,
+            llm_calls: 0,
         },
     }
 }

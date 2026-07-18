@@ -174,6 +174,10 @@ pub struct Config {
     /// every request.
     #[serde(default)]
     pub advocate_mode: AdvocateMode,
+    /// Per-request LLM-call ceiling (phase E.2). `None` = unlimited (calls are
+    /// still counted). When set, calls beyond the limit are refused — a hard stop
+    /// on call stacking across refinement, verifier, and advocate.
+    pub max_llm_calls_per_request: Option<usize>,
 }
 
 fn default_temperature() -> f32 {
@@ -219,6 +223,7 @@ impl Default for Config {
             request_rationale: false,
             formal_rules_path: None,
             advocate_mode: AdvocateMode::Off,
+            max_llm_calls_per_request: None,
         }
     }
 }
@@ -602,6 +607,10 @@ pub struct HarnessResult {
     /// is enabled and (for HighStakes) the gate passed. Absent otherwise.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub advocate: Option<AdvocateReport>,
+    /// Number of LLM calls made servicing this request (phase E.2). Feeds the
+    /// `sbh_llm_calls_total` metric and surfaces call stacking in the trace.
+    #[serde(default)]
+    pub llm_calls: usize,
 }
 
 #[cfg(test)]

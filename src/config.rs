@@ -26,6 +26,7 @@ struct FileConfig {
     request_rationale: Option<bool>,
     formal_rules_path: Option<String>,
     advocate_mode: Option<String>,
+    max_llm_calls_per_request: Option<usize>,
 }
 
 fn load_file_config() -> FileConfig {
@@ -200,6 +201,10 @@ pub fn build_config() -> Config {
             .or(file.advocate_mode)
             .map(|s| parse_advocate_mode(&s))
             .unwrap_or_default(),
+        max_llm_calls_per_request: std::env::var("SBH_MAX_LLM_CALLS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .or(file.max_llm_calls_per_request),
     }
 }
 
@@ -268,6 +273,14 @@ pub fn validate_config(config: &Config) -> Result<(), Vec<String>> {
     if config.refine_max_iters == 0 {
         errors.push(
             "refine_max_iters must be >= 1 — set SBH_REFINE_ITERS or refine_max_iters in config.toml"
+                .into(),
+        );
+    }
+
+    if config.max_llm_calls_per_request == Some(0) {
+        errors.push(
+            "max_llm_calls_per_request must be >= 1 (or unset for unlimited) — \
+             set SBH_MAX_LLM_CALLS or max_llm_calls_per_request in config.toml"
                 .into(),
         );
     }
@@ -444,6 +457,23 @@ mod tests {
         c.stop_and_ask_threshold = 1.5;
         let errs = validate_config(&c).unwrap_err();
         assert!(errs.iter().any(|e| e.contains("stop_and_ask_threshold")));
+    }
+
+    #[test]
+    fn zero_llm_call_ceiling_is_invalid() {
+        let mut c = base_config();
+        c.max_llm_calls_per_request = Some(0);
+        let errs = validate_config(&c).unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("max_llm_calls_per_request")));
+    }
+
+    #[test]
+    fn parse_advocate_mode_values() {
+        assert_eq!(parse_advocate_mode("off"), AdvocateMode::Off);
+        assert_eq!(parse_advocate_mode("high_stakes"), AdvocateMode::HighStakes);
+        assert_eq!(parse_advocate_mode("always"), AdvocateMode::Always);
+        // Unknown falls back to Off (warning to stderr).
+        assert_eq!(parse_advocate_mode("typo"), AdvocateMode::Off);
     }
 
     #[test]

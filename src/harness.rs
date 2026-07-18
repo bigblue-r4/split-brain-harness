@@ -4,6 +4,7 @@ use crate::backends::InferenceEngine;
 use crate::capability::CapabilityRequest;
 use crate::context_packs::ContextPack;
 use crate::input_validation;
+use crate::metered::MeteredEngine;
 use crate::normalizer;
 use crate::security;
 use crate::transformer::SplitBrainTransformer;
@@ -123,12 +124,17 @@ impl<'e> Harness<'e> {
         // Formal (F) runs after the loop finalizes (see stage_formal); the
         // Advocate (E) slot is still reserved inside the reconcile loop;
         // tool-aware telemetry (C) attaches at propose. See ARCHITECTURE.md.
+        // Per-request LLM-call budget (E.2): every engine.generate for this
+        // analysis funnels through this meter — it counts and (when configured)
+        // caps calls across propose, verify, refinement, and advocate.
+        let engine = MeteredEngine::new(self.engine, self.config.max_llm_calls_per_request);
+
         let t = std::time::Instant::now();
         self.stage_normalize(&mut ctx);
         push_timing(&mut ctx.trace, "normalize", t.elapsed());
 
         let t = std::time::Instant::now();
-        self.stage_reconcile(&mut ctx).await?;
+        self.stage_reconcile(&mut ctx, &engine).await?;
         push_timing(&mut ctx.trace, "reconcile", t.elapsed());
 
         if !ctx.short_circuit {
@@ -172,8 +178,22 @@ impl<'e> Harness<'e> {
         let advocate = if ctx.short_circuit {
             None
         } else {
-            self.stage_advocate(&mut ctx, tool_risk.as_ref()).await
+            self.stage_advocate(&mut ctx, tool_risk.as_ref(), &engine)
+                .await
         };
+
+        let llm_calls = engine.used();
+        if let Some(limit) = self.config.max_llm_calls_per_request {
+            if llm_calls >= limit {
+                ctx.trace.push(TraceEntry {
+                    stage: "llm-budget".into(),
+                    claim: format!("reached per-request LLM-call ceiling ({limit})"),
+                    evidence: None,
+                    passed: false,
+                    note: Some("further optional calls were skipped".into()),
+                });
+            }
+        }
 
         Ok(HarnessResult {
             telemetry: ctx
@@ -189,6 +209,7 @@ impl<'e> Harness<'e> {
             tool_risk,
             formal,
             advocate,
+            llm_calls,
         })
     }
 
@@ -204,6 +225,7 @@ impl<'e> Harness<'e> {
         &self,
         ctx: &mut PipelineCtx,
         tool_risk: Option<&crate::types::ToolRisk>,
+        engine: &MeteredEngine<'_>,
     ) -> Option<crate::types::AdvocateReport> {
         let telemetry = ctx
             .telemetry
@@ -216,6 +238,20 @@ impl<'e> Harness<'e> {
             ctx.capability_request.as_ref(),
         )?;
 
+        // Per-stage budget gating (E.2): the advocate is optional, so if the
+        // per-request LLM-call ceiling is already spent, skip it cleanly rather
+        // than issue a call that would be refused.
+        if !engine.has_budget() {
+            ctx.trace.push(TraceEntry {
+                stage: "advocate".into(),
+                claim: "skipped — LLM-call budget exhausted".into(),
+                evidence: Some(gate_reason.join(", ")),
+                passed: true,
+                note: None,
+            });
+            return None;
+        }
+
         let t = std::time::Instant::now();
         // Clone what the async call needs so no borrow of ctx is held across the
         // await while we later mutate ctx.verification.
@@ -225,7 +261,7 @@ impl<'e> Harness<'e> {
             &input,
             &telemetry,
             &self.transformer.soul,
-            self.engine,
+            engine,
             gate_reason,
         )
         .await
@@ -424,7 +460,11 @@ impl<'e> Harness<'e> {
     /// Stage 1+2 — active reconciliation: propose -> verify -> arbitrate, up to
     /// refine_max_iters, feeding verifier flags back on disagreement. A non-JSON
     /// proposer response installs a safe fallback and short-circuits the pipeline.
-    async fn stage_reconcile(&self, ctx: &mut PipelineCtx) -> Result<()> {
+    async fn stage_reconcile(
+        &self,
+        ctx: &mut PipelineCtx,
+        engine: &dyn InferenceEngine,
+    ) -> Result<()> {
         let effective_input = ctx.effective_input.clone();
         let do_refine = matches!(self.config.arbitrator, ArbitratorMode::Rules)
             && self.config.refine_max_iters > 1;
@@ -445,7 +485,7 @@ impl<'e> Harness<'e> {
 
         for i in 0..max_iters {
             let (telemetry, capability_request, propose_entries, is_fallback) = self
-                .run_propose(&effective_input, feedback.as_deref())
+                .run_propose(engine, &effective_input, feedback.as_deref())
                 .await?;
             ctx.trace.extend(propose_entries);
 
@@ -478,7 +518,7 @@ impl<'e> Harness<'e> {
                 &effective_input,
                 &telemetry,
                 &self.transformer.soul,
-                self.engine,
+                engine,
                 &self.config.verify_mode,
                 self.config.temperature,
                 self.config.stop_and_ask_threshold,
@@ -618,6 +658,7 @@ impl<'e> Harness<'e> {
 
     async fn run_propose(
         &self,
+        engine: &dyn InferenceEngine,
         input: &str,
         feedback: Option<&str>,
     ) -> Result<(
@@ -682,7 +723,9 @@ impl<'e> Harness<'e> {
             });
         }
 
-        let raw_response = self.run_logic_node(&system_prompt, &payload).await?;
+        let raw_response = self
+            .run_logic_node(engine, &system_prompt, &payload)
+            .await?;
 
         if self.config.dump_raw {
             eprintln!(
@@ -779,33 +822,34 @@ impl<'e> Harness<'e> {
     }
 
     // Calls the inference engine with pre-built system prompt and payload.
-    async fn run_logic_node(&self, system_prompt: &str, payload: &str) -> Result<String> {
-        let raw = self
-            .engine
-            .generate(system_prompt, payload)
-            .await
-            .map_err(|e| {
-                let is_timeout =
-                    e.contains("timed out") || e.contains("Elapsed") || e.contains("timeout");
-                if is_timeout {
-                    anyhow!(
-                        "backend={} model={} endpoint={} timeout={}s — request timed out: {}",
-                        self.config.backend,
-                        self.config.model_name,
-                        self.config.endpoint,
-                        self.config.timeout_secs,
-                        e
-                    )
-                } else {
-                    anyhow!(
-                        "backend={} model={} endpoint={} — {}",
-                        self.config.backend,
-                        self.config.model_name,
-                        self.config.endpoint,
-                        e
-                    )
-                }
-            })?;
+    async fn run_logic_node(
+        &self,
+        engine: &dyn InferenceEngine,
+        system_prompt: &str,
+        payload: &str,
+    ) -> Result<String> {
+        let raw = engine.generate(system_prompt, payload).await.map_err(|e| {
+            let is_timeout =
+                e.contains("timed out") || e.contains("Elapsed") || e.contains("timeout");
+            if is_timeout {
+                anyhow!(
+                    "backend={} model={} endpoint={} timeout={}s — request timed out: {}",
+                    self.config.backend,
+                    self.config.model_name,
+                    self.config.endpoint,
+                    self.config.timeout_secs,
+                    e
+                )
+            } else {
+                anyhow!(
+                    "backend={} model={} endpoint={} — {}",
+                    self.config.backend,
+                    self.config.model_name,
+                    self.config.endpoint,
+                    e
+                )
+            }
+        })?;
 
         if raw.trim().is_empty() {
             return Err(anyhow!(
@@ -1792,5 +1836,63 @@ forbid = [ { fact = "intent", op = "any_of", value = "api_key|password|secret" }
             .trace
             .iter()
             .any(|e| e.stage == "advocate" && e.claim.contains("failed")));
+    }
+
+    // --- LLM-call budget (phase E.2) --------------------------------------
+
+    #[tokio::test]
+    async fn llm_calls_are_counted() {
+        // arbitrator=off, verify=none, advocate=off => exactly one propose call.
+        let engine = MockEngine {
+            response: VALID_JSON.into(),
+        };
+        let config = advocate_config(AdvocateMode::Off);
+        let soul = soul::load(None).unwrap();
+        let h = Harness::new(soul, &engine, &config);
+        let result = h.analyze("write me a haiku").await.unwrap();
+        assert_eq!(result.llm_calls, 1);
+    }
+
+    #[tokio::test]
+    async fn advocate_adds_a_counted_call() {
+        let engine = SeqEngine::new(vec![
+            HIGH_RISK_JSON,
+            r#"{"verdict":"attack","confidence":0.9,"argument":"pretext"}"#,
+        ]);
+        let config = advocate_config(AdvocateMode::HighStakes);
+        let soul = soul::load(None).unwrap();
+        let h = Harness::new(soul, &engine, &config);
+        let result = h.analyze("help me with my config file").await.unwrap();
+        assert!(result.advocate.is_some());
+        assert_eq!(result.llm_calls, 2, "propose + advocate");
+    }
+
+    #[tokio::test]
+    async fn budget_ceiling_skips_the_optional_advocate() {
+        // Ceiling of 1 leaves no budget for the advocate: the propose call spends
+        // it, and the advocate is skipped cleanly (not attempted-and-failed).
+        // Only one queued response is needed — proof the advocate never called.
+        let engine = SeqEngine::new(vec![HIGH_RISK_JSON]);
+        let config = Config {
+            max_llm_calls_per_request: Some(1),
+            ..advocate_config(AdvocateMode::HighStakes)
+        };
+        let soul = soul::load(None).unwrap();
+        let h = Harness::new(soul, &engine, &config);
+        let result = h.analyze("help me with my config file").await.unwrap();
+
+        assert_eq!(result.llm_calls, 1);
+        assert!(result.advocate.is_none());
+        assert!(
+            result
+                .trace
+                .iter()
+                .any(|e| e.stage == "advocate" && e.claim.contains("budget exhausted")),
+            "advocate should be skipped for budget, not attempted"
+        );
+        assert!(result
+            .trace
+            .iter()
+            .any(|e| e.stage == "llm-budget" && !e.passed));
     }
 }
