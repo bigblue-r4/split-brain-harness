@@ -225,6 +225,7 @@ impl<'e> Harness<'e> {
                     confidence: 0.0,
                     disagreement: Default::default(),
                     stop_and_ask: true,
+                    fired_checks: vec![],
                 };
                 ctx.telemetry = Some(telemetry);
                 ctx.verification = Some(verification);

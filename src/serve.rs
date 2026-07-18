@@ -1198,6 +1198,7 @@ mod tests {
                 confidence: 0.9,
                 disagreement: Default::default(),
                 stop_and_ask: false,
+                fired_checks: vec![],
             },
             trace: vec![],
             capability_request: None,

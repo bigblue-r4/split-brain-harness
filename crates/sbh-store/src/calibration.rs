@@ -28,6 +28,9 @@ pub struct CalibrationFeatures {
     pub coherence: f32,
     pub injection_fingerprint: bool,
     pub raw_confidence: f32,
+    /// IDs of the deterministic checks that fired (for HITL weight-tuning, D).
+    #[serde(default)]
+    pub fired_checks: Vec<String>,
 }
 
 /// One append-only calibration record.
@@ -63,6 +66,7 @@ pub fn entry_from(input: &str, report: &VerificationReport) -> CalibrationEntry 
             coherence: report.disagreement.adjusted_confidence, // structural base
             injection_fingerprint: report.disagreement.injection_fingerprint,
             raw_confidence: report.confidence,
+            fired_checks: report.fired_checks.clone(),
         },
         predicted_confidence: report.confidence,
         label: None,
@@ -179,6 +183,81 @@ pub fn fit_platt(samples: &[(f32, bool)]) -> Option<PlattParams> {
     })
 }
 
+/// Advisory weight-tuning signal for one check (D). `correct_rate` is the
+/// fraction of labeled entries where this check fired AND the verdict was correct.
+#[derive(Debug, Clone)]
+pub struct CheckAdvice {
+    pub check: String,
+    pub fired: usize,
+    pub correct_when_fired: usize,
+    pub correct_rate: f32,
+    pub suggestion: &'static str,
+}
+
+/// Correlate each deterministic check's firing with feedback labels. A check that
+/// fires often but on entries whose verdict was *wrong* is over-firing — advise
+/// lowering its weight; one that fires on correct verdicts is pulling its weight.
+/// **Advisory only** — the caller reviews before touching any weight.
+pub fn tune_weights(entries: &[CalibrationEntry]) -> Vec<CheckAdvice> {
+    use std::collections::HashMap;
+    // Labels arrive as separate feedback rows; join by fingerprint.
+    let mut labels: HashMap<&str, bool> = HashMap::new();
+    for e in entries {
+        if let Some(l) = e.label {
+            labels.insert(e.input_fingerprint.as_str(), l);
+        }
+    }
+    // Per check: (times fired on a labeled entry, times the verdict was correct).
+    let mut stat: HashMap<String, (usize, usize)> = HashMap::new();
+    for e in entries {
+        if e.label.is_some() {
+            continue; // featureful rows carry fired_checks; label rows don't
+        }
+        let Some(&correct) = labels.get(e.input_fingerprint.as_str()) else {
+            continue;
+        };
+        for c in &e.features.fired_checks {
+            let s = stat.entry(c.clone()).or_insert((0, 0));
+            s.0 += 1;
+            if correct {
+                s.1 += 1;
+            }
+        }
+    }
+    let mut out: Vec<CheckAdvice> = stat
+        .into_iter()
+        .map(|(check, (fired, correct))| {
+            let rate = if fired > 0 {
+                correct as f32 / fired as f32
+            } else {
+                0.0
+            };
+            let suggestion = if fired < 3 {
+                "insufficient data"
+            } else if rate < 0.5 {
+                "lower weight — over-fires"
+            } else if rate > 0.8 {
+                "raise weight — reliable"
+            } else {
+                "keep"
+            };
+            CheckAdvice {
+                check,
+                fired,
+                correct_when_fired: correct,
+                correct_rate: rate,
+                suggestion,
+            }
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        a.correct_rate
+            .partial_cmp(&b.correct_rate)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,6 +294,36 @@ mod tests {
         assert_eq!(samples.len(), 1);
         assert!((samples[0].0 - 0.8).abs() < 1e-6);
         assert!(samples[0].1);
+    }
+
+    #[test]
+    fn tune_weights_distinguishes_overfiring_from_reliable() {
+        let feat = |fp: &str, checks: &[&str]| CalibrationEntry {
+            timestamp: "t".into(),
+            input_fingerprint: fp.into(),
+            features: CalibrationFeatures {
+                fired_checks: checks.iter().map(|s| s.to_string()).collect(),
+                ..Default::default()
+            },
+            predicted_confidence: 0.5,
+            label: None,
+        };
+        let mut entries = vec![];
+        for i in 0..4 {
+            // "noisy" fires but the verdict was always wrong
+            entries.push(feat(&format!("n{i}"), &["noisy"]));
+            entries.push(label_entry(&format!("n{i}"), false));
+            // "good" fires and the verdict was always correct
+            entries.push(feat(&format!("g{i}"), &["good"]));
+            entries.push(label_entry(&format!("g{i}"), true));
+        }
+        let advice = tune_weights(&entries);
+        let noisy = advice.iter().find(|a| a.check == "noisy").unwrap();
+        let good = advice.iter().find(|a| a.check == "good").unwrap();
+        assert_eq!(noisy.correct_rate, 0.0);
+        assert!(noisy.suggestion.contains("lower"));
+        assert_eq!(good.correct_rate, 1.0);
+        assert!(good.suggestion.contains("raise"));
     }
 
     #[test]

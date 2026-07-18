@@ -122,6 +122,7 @@ pub async fn verify(
                     confidence: 0.0,
                     disagreement,
                     stop_and_ask: true,
+                    fired_checks: fired_check_ids(&outcomes),
                 };
                 return (report, traces);
             }
@@ -189,6 +190,7 @@ pub async fn verify(
         confidence,
         disagreement,
         stop_and_ask,
+        fired_checks: fired_check_ids(&outcomes),
     };
 
     (report, traces)
@@ -206,6 +208,15 @@ pub fn randomness_discount(temperature: f32) -> f32 {
 // ---------------------------------------------------------------------------
 // DiscoUQ-inspired disagreement scoring
 // ---------------------------------------------------------------------------
+
+/// IDs of the checks that fired — recorded on the report for HITL weight-tuning.
+fn fired_check_ids(outcomes: &[CheckOutcome]) -> Vec<String> {
+    outcomes
+        .iter()
+        .filter(|o| o.fired())
+        .map(|o| o.id.to_string())
+        .collect()
+}
 
 /// Total number of deterministic checks (keep in sync with check_consistency).
 const TOTAL_CHECKS: usize = 8;

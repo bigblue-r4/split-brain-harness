@@ -397,6 +397,10 @@ pub struct VerificationReport {
     /// When true, confidence is below threshold — caller should pause and ask
     /// for clarification rather than acting on the result.
     pub stop_and_ask: bool,
+    /// IDs of the deterministic checks that fired (for HITL weight-tuning, D).
+    /// Additive; empty when no checks fired or verification was skipped.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fired_checks: Vec<String>,
 }
 
 /// Summary of pre-Stage-1 obfuscation detections from the normalizer pass.
