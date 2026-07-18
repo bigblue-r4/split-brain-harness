@@ -15,27 +15,70 @@ const RULES: &[Rule] = &[
     (
         |t| t.code_execution = true,
         "code_execution",
-        &["execute", "run this code", "run the script", "eval(", "exec(", "compile and run", "```python", "```bash", "interpreter"],
+        &[
+            "execute",
+            "run this code",
+            "run the script",
+            "eval(",
+            "exec(",
+            "compile and run",
+            "```python",
+            "```bash",
+            "interpreter",
+        ],
     ),
     (
         |t| t.web_access = true,
         "web_access",
-        &["http://", "https://", "www.", "fetch the url", "download from", "curl ", "wget ", "scrape", "browse to"],
+        &[
+            "http://",
+            "https://",
+            "www.",
+            "fetch the url",
+            "download from",
+            "curl ",
+            "wget ",
+            "scrape",
+            "browse to",
+        ],
     ),
     (
         |t| t.file_write = true,
         "file_write",
-        &["write to file", "save to /", "save it to", "create a file", "overwrite", "delete the file", "append to the file"],
+        &[
+            "write to file",
+            "save to /",
+            "save it to",
+            "create a file",
+            "overwrite",
+            "delete the file",
+            "append to the file",
+        ],
     ),
     (
         |t| t.network = true,
         "network",
-        &["open a socket", "connect to the server", "send a packet", "post to the endpoint", "tcp connection", "listen on port"],
+        &[
+            "open a socket",
+            "connect to the server",
+            "send a packet",
+            "post to the endpoint",
+            "tcp connection",
+            "listen on port",
+        ],
     ),
     (
         |t| t.shell = true,
         "shell",
-        &["/bin/", "rm -rf", "sudo ", "chmod ", "os.system", "subprocess", "shell command"],
+        &[
+            "/bin/",
+            "rm -rf",
+            "sudo ",
+            "chmod ",
+            "os.system",
+            "subprocess",
+            "shell command",
+        ],
     ),
 ];
 
@@ -68,7 +111,8 @@ pub fn classify(input: &str, capability_request: Option<&CapabilityRequest>) -> 
             tr.file_write = true;
         }
         tr.sources.push("capability_request".into());
-        tr.markers.push(format!("capability_request: {}", cr.capability));
+        tr.markers
+            .push(format!("capability_request: {}", cr.capability));
     }
 
     tr

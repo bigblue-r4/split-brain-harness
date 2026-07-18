@@ -12,15 +12,15 @@ use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 
-use sbh_llm::InferenceEngine;
-use sbh_core::capability::{Budget, CapabilityMemoryRecord, CapabilityRequest, ToolMetrics};
 use crate::code_gen::{self, GeneratedTool};
-use sbh_core::input_validation;
-use sbh_safety::policy::{self, PolicyState};
 use crate::reputation::{self, ReputationScore};
 use crate::tool_memory::CapabilityMemory;
-use sbh_core::types::Soul;
 use crate::wasm_forge::{CompileOutcome, ExecuteOutcome, WasmCompiler, WasmExecutor};
+use sbh_core::capability::{Budget, CapabilityMemoryRecord, CapabilityRequest, ToolMetrics};
+use sbh_core::input_validation;
+use sbh_core::types::Soul;
+use sbh_llm::InferenceEngine;
+use sbh_safety::policy::{self, PolicyState};
 
 // ---------------------------------------------------------------------------
 // Per-attempt record
@@ -476,9 +476,9 @@ fn shape_token(contract: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sbh_core::capability::CapabilityConstraints;
     use crate::wasm_forge::{CompileOutcome, ExecuteOutcome, WasmCompiler, WasmExecutor};
     use async_trait::async_trait;
+    use sbh_core::capability::CapabilityConstraints;
 
     // --- Mock engine that cycles through a list of responses ---
 

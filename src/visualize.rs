@@ -97,15 +97,15 @@ pub fn render_html(r: &HarnessResult) -> String {
             "intensity",
             format!("{:.2}", tel.affective_telemetry.emotional_intensity),
         ),
-        ("urgency", format!("{:.2}", tel.cognitive_state.urgency_vector)),
+        (
+            "urgency",
+            format!("{:.2}", tel.cognitive_state.urgency_vector),
+        ),
         (
             "coherence",
             format!("{:.2}", tel.cognitive_state.coherence_rating),
         ),
-        (
-            "tone",
-            tel.affective_telemetry.structural_tone.join(", "),
-        ),
+        ("tone", tel.affective_telemetry.structural_tone.join(", ")),
     ] {
         b.push_str(&format!(
             "<div class=\"kv\"><span class=\"k\">{k}</span><span class=\"v\">{}</span></div>",
@@ -150,7 +150,11 @@ pub fn render_html(r: &HarnessResult) -> String {
     if !times.is_empty() {
         b.push_str("<div class=\"card\" style=\"margin-bottom:18px\"><h3>Pipeline stage timings</h3><div class=\"stages\">");
         for (name, ms) in &times {
-            let pct = if max_ms > 0.0 { (ms / max_ms) * 100.0 } else { 0.0 };
+            let pct = if max_ms > 0.0 {
+                (ms / max_ms) * 100.0
+            } else {
+                0.0
+            };
             b.push_str(&format!(
                 "<div class=\"stage\"><span class=\"n\">{}</span>\
                  <div class=\"bar\" style=\"width:{:.0}%\"></div>\
@@ -265,7 +269,10 @@ mod tests {
     fn escapes_model_controlled_text() {
         let r: HarnessResult = serde_json::from_str(SAMPLE).unwrap();
         let html = render_html(&r);
-        assert!(!html.contains("<script>x</script>"), "must not inject raw HTML");
+        assert!(
+            !html.contains("<script>x</script>"),
+            "must not inject raw HTML"
+        );
         assert!(html.contains("&lt;script&gt;"));
     }
 }

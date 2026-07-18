@@ -366,7 +366,10 @@ mod tests {
             output.capability_request.is_none(),
             "capability_request must be absent when not emitted"
         );
-        assert_eq!(output.telemetry.intent_matrix.manipulation_risk.as_str(), "low");
+        assert_eq!(
+            output.telemetry.intent_matrix.manipulation_risk.as_str(),
+            "low"
+        );
     }
 
     #[test]

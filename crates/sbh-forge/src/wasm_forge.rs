@@ -27,11 +27,11 @@ const WASM_EXEC_TIMEOUT_MS: u64 = 15_000;
 
 use serde::{Deserialize, Serialize};
 
-use sbh_core::capability::{Budget, CapabilityMemoryRecord, CapabilityRequest, ToolMetrics};
 use crate::code_gen::GeneratedTool;
+use crate::tool_memory::CapabilityMemory;
+use sbh_core::capability::{Budget, CapabilityMemoryRecord, CapabilityRequest, ToolMetrics};
 use sbh_core::input_validation;
 use sbh_safety::policy::{self, PolicyState};
-use crate::tool_memory::CapabilityMemory;
 
 // ---------------------------------------------------------------------------
 // WASM main() wrapper
@@ -688,8 +688,8 @@ fn monotonic_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sbh_core::capability::CapabilityConstraints;
     use crate::static_analysis;
+    use sbh_core::capability::CapabilityConstraints;
 
     // --- Mock compiler ---
 

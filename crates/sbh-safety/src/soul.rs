@@ -1,5 +1,5 @@
-use sbh_core::types::Soul;
 use anyhow::{anyhow, Result};
+use sbh_core::types::Soul;
 
 const DEFAULT_SOUL: &str = include_str!("../soul.md");
 

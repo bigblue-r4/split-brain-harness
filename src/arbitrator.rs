@@ -38,7 +38,8 @@ pub fn decide(iters: &[RefinementIteration], target: f32, max_iters: usize) -> A
     let last_idx = iters.len() - 1;
     let last = &iters[last_idx];
 
-    let acceptable = |it: &RefinementIteration| it.passed && it.confidence >= target && !it.stop_and_ask;
+    let acceptable =
+        |it: &RefinementIteration| it.passed && it.confidence >= target && !it.stop_and_ask;
 
     // 1. Latest read is clean and confident — take it.
     if acceptable(last) {
@@ -103,7 +104,12 @@ fn best_iteration(iters: &[RefinementIteration]) -> usize {
 mod tests {
     use super::*;
 
-    fn it(iteration: usize, confidence: f32, passed: bool, stop_and_ask: bool) -> RefinementIteration {
+    fn it(
+        iteration: usize,
+        confidence: f32,
+        passed: bool,
+        stop_and_ask: bool,
+    ) -> RefinementIteration {
         RefinementIteration {
             iteration,
             confidence,
@@ -151,6 +157,9 @@ mod tests {
         let iters = vec![it(0, 0.38, false, true), it(1, 0.10, false, true)];
         let d = decide(&iters, 0.4, 2);
         assert_eq!(d.verdict, ArbiterVerdict::Escalate);
-        assert_eq!(d.chosen_iteration, 0, "must not surface the regressed second pass");
+        assert_eq!(
+            d.chosen_iteration, 0,
+            "must not surface the regressed second pass"
+        );
     }
 }

@@ -599,7 +599,9 @@ fn print_result_pretty(r: &HarnessResult) {
     };
     println!("  {DIM}verification{R}  {supported}  {DIM}conf:{R} {conf_color}{conf:.2}{R}{sas}");
     if let Some(ref refinement) = r.refinement {
-        if refinement.iterations.len() > 1 || refinement.decision.verdict != split_brain_harness::types::ArbiterVerdict::Accept {
+        if refinement.iterations.len() > 1
+            || refinement.decision.verdict != split_brain_harness::types::ArbiterVerdict::Accept
+        {
             println!(
                 "  {DIM}refinement{R}   {} iteration(s) · {DIM}verdict:{R} {}",
                 refinement.iterations.len(),
@@ -961,7 +963,10 @@ fn cmd_tune_weights(
         println!("  no labeled feedback yet — run `sbh feedback --fingerprint <fp> (--correct|--misread)`.");
         return Ok(());
     }
-    println!("  {:<38} {:>6} {:>8}  suggestion", "check", "fired", "correct%");
+    println!(
+        "  {:<38} {:>6} {:>8}  suggestion",
+        "check", "fired", "correct%"
+    );
     for a in &advice {
         println!(
             "  {:<38} {:>6} {:>7.0}%  {}",
@@ -974,10 +979,7 @@ fn cmd_tune_weights(
     Ok(())
 }
 
-fn cmd_calibrate(
-    config: &split_brain_harness::types::Config,
-    store: Option<&str>,
-) -> Result<()> {
+fn cmd_calibrate(config: &split_brain_harness::types::Config, store: Option<&str>) -> Result<()> {
     use split_brain_harness::calibration;
     let path = resolve_store(config, store)?;
     let entries = match calibration::read_all(&path) {
@@ -998,9 +1000,14 @@ fn cmd_calibrate(
     match calibration::fit_platt(&samples) {
         Some(params) => {
             calibration::save_params(&path, &params)?;
-            println!("  fitted Platt scaling: a={:.4} b={:.4}", params.a, params.b);
+            println!(
+                "  fitted Platt scaling: a={:.4} b={:.4}",
+                params.a, params.b
+            );
             println!("  wrote {}", calibration::params_path(&path));
-            println!("  runtime confidence will now be recalibrated when this store is configured.");
+            println!(
+                "  runtime confidence will now be recalibrated when this store is configured."
+            );
         }
         None => {
             println!(
@@ -1024,9 +1031,7 @@ fn cmd_feedback(
     let entry = calibration::label_entry(fingerprint, correct);
     calibration::append(&path, &entry)
         .map_err(|e| anyhow!("could not append feedback to {path}: {e}"))?;
-    println!(
-        "recorded feedback: fingerprint={fingerprint} correct={correct} → {path}"
-    );
+    println!("recorded feedback: fingerprint={fingerprint} correct={correct} → {path}");
     Ok(())
 }
 
