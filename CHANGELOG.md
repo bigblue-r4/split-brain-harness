@@ -4,6 +4,102 @@ All notable changes to split-brain-harness are documented here.
 
 ---
 
+## [1.3.0] — 2026-07-18
+
+The first release since 1.2.0. It bundles the **v1.5 active-reconciliation loop**,
+the **v2 "clean-core" workspace re-architecture** (behaviour-preserving —
+benchmark parity held), and the full **advanced tier** (B–G). Every new command
+is additive; existing commands are unchanged. Confidence and detection behaviour
+are unaffected by default (new stages are gated/off unless configured).
+
+### Added
+
+**Active reconciliation (v1.5)**
+- `analyze` is now a bounded propose → verify → adjudicate loop. A pure-rules
+  arbitrator decides accept / re-refine / escalate; the best iteration is kept
+  (guarded against regression). Config: `arbitrator` (`off` | `rules`, default
+  `rules`), `refine_max_iters`, `refine_confidence_target`, `stop_and_ask_threshold`
+  (envs `SBH_ARBITRATOR`, `SBH_REFINE_ITERS`, `SBH_REFINE_TARGET`, `SBH_STOP_THRESHOLD`).
+  `arbitrator=off` or `refine_max_iters<=1` reproduces the byte-identical one-shot.
+- Two new consistency checks: `scope-creep / hidden-payload` and
+  `value-alignment delta` (8 deterministic checks total).
+- Structured `DisagreementScore` + `CheckOutcome` model (dimension/weight per
+  check) replaces substring-decoded scoring.
+
+**Confidence calibration**
+- `sbh calibrate [--store <path>]` fits offline Platt scaling from labelled
+  feedback; `sbh feedback --fingerprint <fp> (--correct | --misread)` records
+  outcome labels. Append-only JSONL, privacy-by-fingerprint (no raw input stored).
+  Uncalibrated behaviour is identity — enabling a store is a no-op until fitted.
+
+**Observability (tier B)**
+- `sbh visualize [<trace.json>] [--output <out.html>]` renders a HarnessResult to
+  a single self-contained offline HTML report (risk, telemetry, verification,
+  intent, tool-risk, per-stage timing, refinement, trace).
+- New `serve` `/metrics` counters: `sbh_flagged_total`, `sbh_stop_and_ask_total`,
+  `sbh_refinement_iterations_total`, and (below) per-stage counters.
+
+**Tool-aware telemetry (tier C)**
+- Deterministic tool-risk classifier (code-exec / web / file-write / network /
+  shell) cross-checked against the actual capability request, never LLM
+  self-report. Surfaced additively as `HarnessResult.tool_risk`.
+
+**HITL weight tuning (tier D)**
+- `sbh tune-weights [--store <path>]` correlates each check's firing with feedback
+  labels and prints per-check correct-when-fired rates with an advisory direction.
+  Advisory only — never auto-applied.
+
+**Formal verification (tier F)**
+- Deterministic, LLM-free predicate engine over TOML rule domains, running after
+  the reconcile loop. High-severity violations force `stop_and_ask`; a bad rules
+  file fails closed. `sbh formal-check <rules> [input]` lints and dry-runs offline.
+  `sbh_formal_violations_total` metric; starter `rules/credential-egress.toml`.
+
+**Adversarial debate (tier E.1)**
+- Gated devil's-advocate LLM pass (`advocate_mode` `off` | `high_stakes` | `always`,
+  env `SBH_ADVOCATE`). Raise-only guardrail: dissent can add caution / force
+  `stop_and_ask`, never clear a flag. Transient failure is advisory (not fail-closed).
+  `sbh_advocate_dissent_total` metric.
+
+**Per-request LLM-call budget (tier E.2)**
+- `max_llm_calls_per_request` (env `SBH_MAX_LLM_CALLS`) meters and caps generate()
+  calls across a run; the optional advocate skips cleanly when the budget is
+  exhausted. `HarnessResult.llm_calls` + `sbh_llm_calls_total` metric. Unlimited by
+  default.
+
+**Offline meta-cognition (tier G)**
+- `sbh introspect [--store <p>] [--session-log <p>] [--min-cluster <n>] [--json]`
+  clusters *misread* runs by feature signature into archetypes (under-detection /
+  checks-fired-but-wrong / fingerprint-misfire) and prints **advisory** weight and
+  prompt suggestions with concrete weight diffs. Offline, deterministic, and
+  writes nothing — runtime self-modification is a non-goal. Privacy-preserving
+  (clusters off structured features, since stores hold only fingerprints).
+
+### Changed
+
+**v2 "clean-core" workspace re-architecture (behaviour-preserving)**
+- The crate is now a Cargo workspace: leaf crates `sbh-normalize`, `sbh-core`,
+  `sbh-store`, `sbh-llm`, `sbh-safety`, `sbh-forge` are carved out and re-exported
+  from the root so existing paths resolve unchanged.
+- `analyze()` decomposed into a timed stage pipeline (normalize → reconcile →
+  obfuscation → calibration), each stage wall-clock-timed into the trace.
+- Tolerant `Risk` enum (bad model values → `Risk::Unknown`, still flagged) and a
+  strict `ModelContract` parse boundary.
+- **Benchmark parity gate passed** (≈95% row-by-row agreement vs 1.2.0, precision
+  parity exact) — the refactor is behaviour-preserving.
+
+### Fixed
+- UTF-8 panic in the normalizer's Stage 0 trace formatting on multibyte input
+  (byte-slice → char-safe truncation).
+- `parse_verify_mode` never mapped `"reconcile"` (silently fell back to deterministic).
+
+### Notes
+- crates.io publishing is paused while the crate is a workspace (unversioned path
+  deps on unpublished members); this release is GitHub-only. crates.io remains at
+  1.2.0.
+
+---
+
 ## [1.2.0] — 2026-07-02
 
 ### Security

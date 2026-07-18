@@ -22,14 +22,10 @@ jobs:
       - run: cargo test
       - run: cargo clippy -- -D warnings
 
-  publish-crate:
-    name: Publish to crates.io
-    needs: check
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - run: cargo publish --token ${{ secrets.CARGO_REGISTRY_TOKEN }}
+  # NOTE: crates.io publishing is disabled while the crate is a Cargo workspace.
+  # The root crate has path dependencies on the unpublished `sbh-*` members, which
+  # `cargo publish` rejects. Publishing the workspace (versioning + publishing all
+  # member crates first) is tracked separately; releases are GitHub-only until then.
 
   create-release:
     name: Create GitHub Release
