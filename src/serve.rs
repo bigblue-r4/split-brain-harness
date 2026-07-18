@@ -326,6 +326,8 @@ pub struct Metrics {
     pub refinement_iterations_total: AtomicU64,
     /// Formal-stage violations raised across analyses (phase F).
     pub formal_violations_total: AtomicU64,
+    /// Advocate dissents that escalated the gate (phase E).
+    pub advocate_dissent_total: AtomicU64,
 }
 
 impl Metrics {
@@ -395,6 +397,12 @@ impl Metrics {
                 "counter",
                 "Formal-stage predicate violations raised (phase F)",
                 self.formal_violations_total.load(Ordering::Relaxed),
+            ),
+            (
+                "sbh_advocate_dissent_total",
+                "counter",
+                "Devil's-Advocate dissents that escalated the gate (phase E)",
+                self.advocate_dissent_total.load(Ordering::Relaxed),
             ),
             (
                 "sbh_active_sessions",
@@ -617,6 +625,11 @@ async fn chat_completions(
             .metrics
             .formal_violations_total
             .fetch_add(f.violations.len() as u64, Ordering::Relaxed);
+    }
+    if let Some(ref a) = result.advocate {
+        if a.dissented {
+            Metrics::inc(&state.metrics.advocate_dissent_total);
+        }
     }
 
     // --- session tracking: push turn, check for escalation, evict stale ---
@@ -1063,8 +1076,8 @@ mod tests {
         let out = m.render(0, 0);
         let help_count = out.lines().filter(|l| l.starts_with("# HELP")).count();
         let type_count = out.lines().filter(|l| l.starts_with("# TYPE")).count();
-        assert_eq!(help_count, 12, "expected 12 # HELP lines");
-        assert_eq!(type_count, 12, "expected 12 # TYPE lines");
+        assert_eq!(help_count, 13, "expected 13 # HELP lines");
+        assert_eq!(type_count, 13, "expected 13 # TYPE lines");
     }
 
     // --- url_encode ---
@@ -1220,6 +1233,7 @@ mod tests {
             refinement: None,
             tool_risk: None,
             formal: None,
+            advocate: None,
         };
         let s = summarize_result(&result);
         assert!(s.contains("neutral"));

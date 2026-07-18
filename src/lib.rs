@@ -23,6 +23,7 @@ pub use sbh_forge::{
 };
 
 pub mod adaptor;
+pub mod advocate;
 pub mod arbitrator;
 pub mod config;
 pub use config::validate_config;

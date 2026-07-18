@@ -1,4 +1,4 @@
-use crate::types::{ArbitratorMode, BackendType, Config, VerifyMode};
+use crate::types::{AdvocateMode, ArbitratorMode, BackendType, Config, VerifyMode};
 use serde::Deserialize;
 
 #[derive(Deserialize, Default)]
@@ -25,6 +25,7 @@ struct FileConfig {
     calibration_path: Option<String>,
     request_rationale: Option<bool>,
     formal_rules_path: Option<String>,
+    advocate_mode: Option<String>,
 }
 
 fn load_file_config() -> FileConfig {
@@ -77,6 +78,22 @@ pub fn parse_arbitrator_mode(s: &str) -> ArbitratorMode {
                  valid values: rules, off. Falling back to rules."
             );
             ArbitratorMode::Rules
+        }
+    }
+}
+
+/// Maps an advocate-mode name to an `AdvocateMode`. Unknown → default (`Off`).
+pub fn parse_advocate_mode(s: &str) -> AdvocateMode {
+    match s.trim().to_lowercase().as_str() {
+        "off" => AdvocateMode::Off,
+        "high_stakes" | "high-stakes" | "highstakes" => AdvocateMode::HighStakes,
+        "always" => AdvocateMode::Always,
+        other => {
+            eprintln!(
+                "warning: unrecognized SBH_ADVOCATE={other:?} — \
+                 valid values: off, high_stakes, always. Falling back to off."
+            );
+            AdvocateMode::Off
         }
     }
 }
@@ -178,6 +195,11 @@ pub fn build_config() -> Config {
         formal_rules_path: std::env::var("SBH_FORMAL_RULES")
             .ok()
             .or(file.formal_rules_path),
+        advocate_mode: std::env::var("SBH_ADVOCATE")
+            .ok()
+            .or(file.advocate_mode)
+            .map(|s| parse_advocate_mode(&s))
+            .unwrap_or_default(),
     }
 }
 

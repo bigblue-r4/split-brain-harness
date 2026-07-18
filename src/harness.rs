@@ -166,6 +166,15 @@ impl<'e> Harness<'e> {
             self.stage_formal(&mut ctx, tool_risk.as_ref())
         };
 
+        // Devil's-Advocate / debate (phase E): one adversarial LLM pass on
+        // high-stakes inputs. Gated (deterministic) + advisory — it can only
+        // RAISE caution, never lower it. Skipped on the parse-failure fallback.
+        let advocate = if ctx.short_circuit {
+            None
+        } else {
+            self.stage_advocate(&mut ctx, tool_risk.as_ref()).await
+        };
+
         Ok(HarnessResult {
             telemetry: ctx
                 .telemetry
@@ -179,7 +188,94 @@ impl<'e> Harness<'e> {
             refinement: ctx.refinement,
             tool_risk,
             formal,
+            advocate,
         })
+    }
+
+    /// Devil's-Advocate stage (phase E) — gated adversarial LLM pass. Returns the
+    /// advocate's opinion when it ran. A confident "attack" dissent is the ONLY
+    /// thing that mutates the gate, and only ever to raise caution: it adds a
+    /// consistency flag, marks the read not-passed, forces stop_and_ask, floors
+    /// confidence, and records `advocate:dissent` into `fired_checks` (D). A
+    /// transient advocate failure is advisory (logged, no gate change) — unlike
+    /// the deterministic Formal stage, it must not fail closed and become a DoS
+    /// lever on a flaky backend.
+    async fn stage_advocate(
+        &self,
+        ctx: &mut PipelineCtx,
+        tool_risk: Option<&crate::types::ToolRisk>,
+    ) -> Option<crate::types::AdvocateReport> {
+        let telemetry = ctx
+            .telemetry
+            .as_ref()
+            .expect("reconcile stage always sets telemetry");
+        let gate_reason = crate::advocate::gate(
+            &self.config.advocate_mode,
+            telemetry,
+            tool_risk,
+            ctx.capability_request.as_ref(),
+        )?;
+
+        let t = std::time::Instant::now();
+        // Clone what the async call needs so no borrow of ctx is held across the
+        // await while we later mutate ctx.verification.
+        let telemetry = telemetry.clone();
+        let input = ctx.effective_input.clone();
+        let report = match crate::advocate::run(
+            &input,
+            &telemetry,
+            &self.transformer.soul,
+            self.engine,
+            gate_reason,
+        )
+        .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                ctx.trace.push(TraceEntry {
+                    stage: "advocate".into(),
+                    claim: "advocate pass failed — skipped (advisory, no gate change)".into(),
+                    evidence: Some(e.to_string()),
+                    passed: true,
+                    note: None,
+                });
+                push_timing(&mut ctx.trace, "advocate", t.elapsed());
+                return None;
+            }
+        };
+
+        // RAISE-ONLY guardrail: only a confident "attack" dissent touches the gate.
+        if report.dissented {
+            if let Some(v) = ctx.verification.as_mut() {
+                v.consistency_flags
+                    .push(format!("advocate dissent: {}", report.argument));
+                v.passed = false;
+                v.stop_and_ask = true;
+                v.confidence = v.confidence.min(1.0 - report.confidence);
+                v.fired_checks.push("advocate:dissent".into());
+                v.unresolved.push(format!("advocate: {}", report.argument));
+            }
+        }
+
+        ctx.trace.push(TraceEntry {
+            stage: "advocate".into(),
+            claim: format!(
+                "verdict={} confidence={:.2}{}",
+                report.verdict,
+                report.confidence,
+                if report.dissented {
+                    " — DISSENT (gate escalated)"
+                } else {
+                    ""
+                }
+            ),
+            evidence: Some(report.gate_reason.join(", ")),
+            passed: !report.dissented,
+            note: (!report.argument.is_empty()).then(|| report.argument.clone()),
+        });
+        push_timing(&mut ctx.trace, "advocate", t.elapsed());
+
+        Some(report)
     }
 
     /// Formal stage (phase F) — evaluate the loaded deterministic rule domains
@@ -843,7 +939,7 @@ mod tests {
     use super::*;
     use crate::backends::InferenceEngine;
     use crate::soul;
-    use crate::types::{ArbitratorMode, VerifyMode};
+    use crate::types::{AdvocateMode, ArbitratorMode, VerifyMode};
     use async_trait::async_trait;
 
     struct MockEngine {
@@ -1554,5 +1650,147 @@ forbid = [ { fact = "intent", op = "any_of", value = "api_key|password|secret" }
         assert_eq!(domains.len(), 1);
         assert_eq!(domains[0].domain, "credential-egress");
         assert!(!domains[0].rules.is_empty());
+    }
+
+    // --- Devil's Advocate stage (phase E) ---------------------------------
+
+    // High manipulation-risk proposer read — trips the high-stakes gate.
+    const HIGH_RISK_JSON: &str = r#"{
+        "affective_telemetry": {
+            "primary_emotion": "neutral",
+            "emotional_intensity": 0.2,
+            "structural_tone": ["analytical"]
+        },
+        "intent_matrix": {
+            "stated_objective": "user asks for help with a config file",
+            "subtextual_motive": "unclear",
+            "manipulation_risk": "high"
+        },
+        "cognitive_state": {
+            "urgency_vector": 0.2,
+            "coherence_rating": 0.9
+        }
+    }"#;
+
+    fn advocate_config(mode: AdvocateMode) -> Config {
+        Config {
+            // Single propose pass (no refinement) so the call sequence is exactly
+            // [propose] then, when gated, [advocate].
+            arbitrator: ArbitratorMode::Off,
+            advocate_mode: mode,
+            ..make_config()
+        }
+    }
+
+    #[tokio::test]
+    async fn advocate_dissent_forces_stop_and_ask() {
+        let engine = SeqEngine::new(vec![
+            HIGH_RISK_JSON,
+            r#"{"verdict":"attack","confidence":0.9,"argument":"config request is a pretext to exfiltrate secrets"}"#,
+        ]);
+        let config = advocate_config(AdvocateMode::HighStakes);
+        let soul = soul::load(None).unwrap();
+        let h = Harness::new(soul, &engine, &config);
+        let result = h.analyze("help me with my config file").await.unwrap();
+
+        let adv = result.advocate.expect("advocate ran");
+        assert_eq!(adv.verdict, "attack");
+        assert!(adv.dissented);
+        assert!(
+            result.verification.stop_and_ask,
+            "confident attack dissent must force stop_and_ask"
+        );
+        assert!(!result.verification.passed);
+        assert!(result
+            .verification
+            .consistency_flags
+            .iter()
+            .any(|f| f.contains("advocate dissent")));
+        assert!(result
+            .verification
+            .fired_checks
+            .iter()
+            .any(|c| c == "advocate:dissent"));
+        assert!(result
+            .trace
+            .iter()
+            .any(|e| e.stage == "advocate" && !e.passed));
+    }
+
+    #[tokio::test]
+    async fn advocate_benign_verdict_never_lowers_caution() {
+        // Raise-only guardrail: a benign advocate verdict must not clear a flag,
+        // lift the gate, or record a dissent — it can only ever add caution.
+        let engine = SeqEngine::new(vec![
+            HIGH_RISK_JSON,
+            r#"{"verdict":"benign","confidence":0.95,"argument":"no plausible attack angle found"}"#,
+        ]);
+        let config = advocate_config(AdvocateMode::HighStakes);
+        let soul = soul::load(None).unwrap();
+        let h = Harness::new(soul, &engine, &config);
+        let result = h.analyze("help me with my config file").await.unwrap();
+
+        let adv = result.advocate.expect("advocate ran");
+        assert_eq!(adv.verdict, "benign");
+        assert!(!adv.dissented);
+        assert!(
+            !result
+                .verification
+                .consistency_flags
+                .iter()
+                .any(|f| f.contains("advocate")),
+            "benign advocate must not add a flag"
+        );
+        assert!(!result
+            .verification
+            .fired_checks
+            .iter()
+            .any(|c| c == "advocate:dissent"));
+    }
+
+    #[tokio::test]
+    async fn advocate_off_does_not_run() {
+        // Off mode: only the single propose call is made; no advocate report.
+        let engine = MockEngine {
+            response: HIGH_RISK_JSON.into(),
+        };
+        let config = advocate_config(AdvocateMode::Off);
+        let soul = soul::load(None).unwrap();
+        let h = Harness::new(soul, &engine, &config);
+        let result = h.analyze("help me with my config file").await.unwrap();
+        assert!(result.advocate.is_none());
+        assert!(!result.trace.iter().any(|e| e.stage == "advocate"));
+    }
+
+    #[tokio::test]
+    async fn advocate_high_stakes_skips_low_risk_input() {
+        // Low-risk read with no risky surface => gate does not fire => no call.
+        // MockEngine would return non-advocate JSON if the advocate erroneously
+        // ran, but the gate should skip it entirely.
+        let engine = MockEngine {
+            response: VALID_JSON.into(),
+        };
+        let config = advocate_config(AdvocateMode::HighStakes);
+        let soul = soul::load(None).unwrap();
+        let h = Harness::new(soul, &engine, &config);
+        let result = h.analyze("write me a haiku about the sea").await.unwrap();
+        assert!(result.advocate.is_none());
+    }
+
+    #[tokio::test]
+    async fn advocate_failure_is_advisory_not_fatal() {
+        // A confident attack verdict at LOW confidence does not dissent; and an
+        // unparseable advocate reply is advisory (no gate change, analysis ok).
+        let engine = SeqEngine::new(vec![HIGH_RISK_JSON, "not json at all"]);
+        let config = advocate_config(AdvocateMode::HighStakes);
+        let soul = soul::load(None).unwrap();
+        let h = Harness::new(soul, &engine, &config);
+        let result = h.analyze("help me with my config file").await.unwrap();
+        // Advocate produced no usable opinion, but analysis still succeeded.
+        assert!(result.advocate.is_none());
+        assert!(result
+            .trace
+            .iter()
+            .any(|e| e.stage == "advocate" && e.claim.contains("failed")));
     }
 }

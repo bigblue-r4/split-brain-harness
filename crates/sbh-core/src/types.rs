@@ -67,6 +67,34 @@ impl std::fmt::Display for ArbitratorMode {
     }
 }
 
+/// Controls the Devil's-Advocate / debate stage (phase E) — an adversarial
+/// third LLM pass that argues the proposer's read is wrong. It can only ever
+/// *raise* caution, never lower it.
+#[derive(Debug, Deserialize, Clone, Default, PartialEq, Eq)]
+pub enum AdvocateMode {
+    /// Never run the advocate. Default — zero added latency/cost.
+    #[serde(rename = "off")]
+    #[default]
+    Off,
+    /// Run only on high-stakes inputs (a deterministic gate: high manipulation
+    /// risk, a risky tool surface, or a capability request). One extra LLM call.
+    #[serde(rename = "high_stakes")]
+    HighStakes,
+    /// Run on every analysis. One extra LLM call per request — use deliberately.
+    #[serde(rename = "always")]
+    Always,
+}
+
+impl std::fmt::Display for AdvocateMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AdvocateMode::Off => write!(f, "off"),
+            AdvocateMode::HighStakes => write!(f, "high_stakes"),
+            AdvocateMode::Always => write!(f, "always"),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Runtime configuration
 // ---------------------------------------------------------------------------
@@ -141,6 +169,11 @@ pub struct Config {
     /// Path to Formal-stage rule domains (phase F): a single `.toml` file or a
     /// directory of them. None = the Formal stage is a no-op (no behavior change).
     pub formal_rules_path: Option<String>,
+    /// Devil's-Advocate / debate stage (phase E). Default `Off` (no extra LLM
+    /// call). `HighStakes` gates on a deterministic risk predicate; `Always` runs
+    /// every request.
+    #[serde(default)]
+    pub advocate_mode: AdvocateMode,
 }
 
 fn default_temperature() -> f32 {
@@ -185,6 +218,7 @@ impl Default for Config {
             calibration_path: None,
             request_rationale: false,
             formal_rules_path: None,
+            advocate_mode: AdvocateMode::Off,
         }
     }
 }
@@ -221,6 +255,10 @@ pub struct Soul {
     pub creative_system_prompt: String,
     pub verifier_system_prompt: String,
     pub code_gen_system_prompt: String,
+    /// Adversarial red-team prompt for the Devil's-Advocate stage (phase E).
+    /// Optional — empty when the soul has no `[ADVOCATE_SYSTEM_PROMPT]` section,
+    /// in which case the advocate stage is skipped even if enabled.
+    pub advocate_system_prompt: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -382,6 +420,29 @@ impl FormalReport {
 }
 
 // ---------------------------------------------------------------------------
+// Devil's-Advocate / debate (phase E)
+// ---------------------------------------------------------------------------
+
+/// The advocate's adversarial reading of the input. Present on `HarnessResult`
+/// only when the advocate stage actually ran (gate passed and a call was made).
+/// By design the advocate can only ever *raise* caution — a `Benign` verdict is
+/// informational and never clears a flag or lifts the gate.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+pub struct AdvocateReport {
+    /// "attack" | "benign" | "unsure" — the advocate's verdict.
+    pub verdict: String,
+    /// Advocate's confidence in its verdict, 0.0–1.0.
+    pub confidence: f32,
+    /// One-sentence strongest argument that the input is manipulative.
+    pub argument: String,
+    /// True when the advocate dissents with enough confidence to escalate the
+    /// gate (verdict "attack" above the dissent threshold).
+    pub dissented: bool,
+    /// Why the advocate ran — the gate signal(s) that triggered it.
+    pub gate_reason: Vec<String>,
+}
+
+// ---------------------------------------------------------------------------
 // Verification layer
 // ---------------------------------------------------------------------------
 
@@ -537,6 +598,10 @@ pub struct HarnessResult {
     /// matched (phase F). Absent when no rules are loaded or none applied.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub formal: Option<FormalReport>,
+    /// Present when the Devil's-Advocate stage ran (phase E) — i.e. advocate_mode
+    /// is enabled and (for HighStakes) the gate passed. Absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub advocate: Option<AdvocateReport>,
 }
 
 #[cfg(test)]

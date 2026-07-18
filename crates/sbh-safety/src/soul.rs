@@ -11,6 +11,8 @@ const OPEN_VERIFIER: &str = "[VERIFIER_SYSTEM_PROMPT]";
 const CLOSE_VERIFIER: &str = "[/VERIFIER_SYSTEM_PROMPT]";
 const OPEN_CODE_GEN: &str = "[CODE_GEN_SYSTEM_PROMPT]";
 const CLOSE_CODE_GEN: &str = "[/CODE_GEN_SYSTEM_PROMPT]";
+const OPEN_ADVOCATE: &str = "[ADVOCATE_SYSTEM_PROMPT]";
+const CLOSE_ADVOCATE: &str = "[/ADVOCATE_SYSTEM_PROMPT]";
 
 /// Load a Soul from disk (if path given) or fall back to the embedded default.
 ///
@@ -52,6 +54,7 @@ fn parse(raw: &str) -> Result<Soul> {
         creative_system_prompt: extract(raw, OPEN_CREATIVE, CLOSE_CREATIVE).unwrap_or_default(),
         verifier_system_prompt: extract(raw, OPEN_VERIFIER, CLOSE_VERIFIER).unwrap_or_default(),
         code_gen_system_prompt: extract(raw, OPEN_CODE_GEN, CLOSE_CODE_GEN).unwrap_or_default(),
+        advocate_system_prompt: extract(raw, OPEN_ADVOCATE, CLOSE_ADVOCATE).unwrap_or_default(),
     })
 }
 
