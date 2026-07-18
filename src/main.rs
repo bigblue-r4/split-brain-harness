@@ -30,6 +30,7 @@ async fn main() -> Result<()> {
             | Command::Feedback { .. }
             | Command::Visualize { .. }
             | Command::TuneWeights { .. }
+            | Command::Introspect { .. }
             | Command::FormalCheck { .. }
     );
     // --dump-prompt exits before any model call, so skip validation there too.
@@ -121,6 +122,18 @@ async fn main() -> Result<()> {
         }
         Command::Visualize { input, output } => cmd_visualize(input.as_deref(), output.as_deref()),
         Command::TuneWeights { store } => cmd_tune_weights(&config, store.as_deref()),
+        Command::Introspect {
+            store,
+            session_log,
+            min_cluster,
+            json,
+        } => cmd_introspect(
+            &config,
+            store.as_deref(),
+            session_log.as_deref(),
+            min_cluster,
+            json,
+        ),
         Command::FormalCheck { rules, input } => cmd_formal_check(&rules, input.as_deref()),
         Command::Calibrate { store } => cmd_calibrate(&config, store.as_deref()),
         Command::Feedback {
@@ -196,6 +209,14 @@ enum Command {
     TuneWeights {
         store: Option<String>,
     },
+    /// Offline meta-cognition (G): cluster failure patterns from the calibration
+    /// and session stores and print advisory weight/prompt suggestions.
+    Introspect {
+        store: Option<String>,
+        session_log: Option<String>,
+        min_cluster: usize,
+        json: bool,
+    },
     /// Offline: lint Formal rule files and (optionally) dry-run them against an input.
     FormalCheck {
         rules: String,
@@ -221,6 +242,7 @@ fn positional_args(args: &[String]) -> Vec<&str> {
         "--tls-key",
         "--store",
         "--fingerprint",
+        "--min-cluster",
     ];
     let mut result = vec![];
     let mut skip_next = false;
@@ -283,6 +305,20 @@ fn parse_command(args: &[String]) -> Result<Command> {
         Some("tune-weights") => {
             let store = flag_value(args, "--store");
             return Ok(Command::TuneWeights { store });
+        }
+        Some("introspect") => {
+            let store = flag_value(args, "--store");
+            let session_log = flag_value(args, "--session-log");
+            let min_cluster = flag_value(args, "--min-cluster")
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(3);
+            let json = args.contains(&"--json".to_string());
+            return Ok(Command::Introspect {
+                store,
+                session_log,
+                min_cluster,
+                json,
+            });
         }
         Some("formal-check") => {
             // rules: a .toml file or directory (positional, required).
@@ -455,6 +491,7 @@ fn parse_command(args: &[String]) -> Result<Command> {
              Usage: split-brain-harness bench <file.jsonl> [--baseline <prev.jsonl>] [--output <out.jsonl>] [--fail-on-regression]\n\
              Usage: split-brain-harness calibrate [--store <path>]\n\
              Usage: split-brain-harness tune-weights [--store <path>]\n\
+             Usage: split-brain-harness introspect [--store <path>] [--session-log <path>] [--min-cluster <n>] [--json]\n\
              Usage: split-brain-harness feedback --fingerprint <fp> (--correct | --misread) [--store <path>]\n\
              Usage: split-brain-harness visualize [<trace.json>] [--output <out.html>]   (or pipe `analyze --raw`)\n\
              Usage: split-brain-harness formal-check <rules.toml|dir> [\"input text\"]"
@@ -995,6 +1032,194 @@ fn cmd_tune_weights(
             a.correct_rate * 100.0,
             a.suggestion
         );
+    }
+    Ok(())
+}
+
+/// Offline meta-cognition (advanced tier G). Reads the calibration + session
+/// stores and prints clustered failure patterns plus ADVISORY weight/prompt
+/// suggestions. Writes nothing — it never edits weights, the soul, or config.
+fn cmd_introspect(
+    config: &split_brain_harness::types::Config,
+    store: Option<&str>,
+    session_log: Option<&str>,
+    min_cluster: usize,
+    json: bool,
+) -> Result<()> {
+    use split_brain_harness::{calibration, introspect, session_log as slog, verifier};
+
+    let cal_path = resolve_store(config, store)?;
+    let cal = match calibration::read_all(&cal_path) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => vec![],
+        Err(e) => {
+            return Err(anyhow!(
+                "could not read calibration store at {cal_path}: {e}"
+            ))
+        }
+    };
+
+    let sess_path = session_log
+        .map(String::from)
+        .or_else(|| config.session_log_path.clone());
+    let sessions = match &sess_path {
+        Some(p) => match slog::read_all(p) {
+            Ok(e) => e,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => vec![],
+            Err(e) => return Err(anyhow!("could not read session log at {p}: {e}")),
+        },
+        None => vec![],
+    };
+
+    let report = introspect::introspect(&cal, &sessions, min_cluster);
+
+    // Suggested weight for an over/under-firing check (advisory heuristic):
+    // over-firing → shed a point (floor 1.0); reliable → add a point.
+    let suggested_weight = |current: f32, suggestion: &str| -> Option<f32> {
+        if suggestion.contains("lower") {
+            Some((current - 1.0).max(1.0))
+        } else if suggestion.contains("raise") {
+            Some(current + 1.0)
+        } else {
+            None
+        }
+    };
+
+    if json {
+        let clusters: Vec<_> = report
+            .clusters
+            .iter()
+            .map(|c| {
+                serde_json::json!({
+                    "archetype": c.archetype.as_str(),
+                    "fired_checks": c.fired_checks,
+                    "injection_fingerprint": c.injection_fingerprint,
+                    "modal_confidence_band": c.modal_band.as_str(),
+                    "count": c.count,
+                    "share_of_misreads": c.share_of_misreads,
+                    "suggestion": c.suggestion,
+                })
+            })
+            .collect();
+        let advice: Vec<_> = report
+            .check_advice
+            .iter()
+            .map(|a| {
+                let current = verifier::check_weight(&a.check);
+                let suggested = current.and_then(|w| suggested_weight(w, a.suggestion));
+                serde_json::json!({
+                    "check": a.check,
+                    "fired": a.fired,
+                    "correct_rate": a.correct_rate,
+                    "direction": a.suggestion,
+                    "current_weight": current,
+                    "suggested_weight": suggested,
+                })
+            })
+            .collect();
+        let out = serde_json::json!({
+            "advisory": true,
+            "calibration_store": cal_path,
+            "session_log": sess_path,
+            "featureful_runs": report.calibration_entries,
+            "labeled": report.labeled,
+            "correct": report.correct,
+            "misreads": report.misreads,
+            "min_cluster": min_cluster.max(1),
+            "failure_clusters": clusters,
+            "weight_advice": advice,
+            "sessions": {
+                "escalations": report.session.escalations,
+                "mean_turns_to_escalation": report.session.mean_turns_to_escalation,
+                "jump_to_high": report.session.jump_to_high,
+                "common_trajectories": report.session.common_trajectories
+                    .iter().map(|(t, n)| serde_json::json!({"trajectory": t, "count": n}))
+                    .collect::<Vec<_>>(),
+            },
+        });
+        println!("{}", serde_json::to_string_pretty(&out)?);
+        return Ok(());
+    }
+
+    println!("sbh introspect — offline meta-cognition (ADVISORY; nothing is applied)");
+    println!("calibration store: {cal_path}");
+    println!(
+        "  {} featureful run(s) · {} labeled · {} correct · {} misread",
+        report.calibration_entries, report.labeled, report.correct, report.misreads
+    );
+    match &sess_path {
+        Some(p) => println!("session log: {p}"),
+        None => println!("session log: (none — pass --session-log or set SBH_SESSION_LOG)"),
+    }
+
+    println!(
+        "\nfailure clusters (misreads grouped by signature; min {}):",
+        min_cluster.max(1)
+    );
+    if report.clusters.is_empty() {
+        println!(
+            "  none at or above the threshold yet — needs more labeled misreads (data-hungry)."
+        );
+    } else {
+        for c in &report.clusters {
+            let checks = if c.fired_checks.is_empty() {
+                "(no check fired)".to_string()
+            } else {
+                c.fired_checks.join(", ")
+            };
+            println!(
+                "  [{}] x{} ({:.0}% of misreads)  band={}  fingerprint={}",
+                c.archetype.as_str(),
+                c.count,
+                c.share_of_misreads * 100.0,
+                c.modal_band.as_str(),
+                c.injection_fingerprint
+            );
+            println!("      checks: {checks}");
+            println!("      → {}", c.suggestion);
+        }
+    }
+
+    println!("\nweight advice (per check; ADVISORY — review before changing any weight):");
+    if report.check_advice.is_empty() {
+        println!("  no labeled feedback yet — run `sbh feedback --fingerprint <fp> (--correct|--misread)`.");
+    } else {
+        for a in &report.check_advice {
+            let current = verifier::check_weight(&a.check);
+            let weight_col = match (
+                current,
+                current.and_then(|w| suggested_weight(w, a.suggestion)),
+            ) {
+                (Some(w), Some(s)) => format!("weight {w:.1} → {s:.1}"),
+                (Some(w), None) => format!("weight {w:.1} (keep)"),
+                (None, _) => "weight ?".to_string(),
+            };
+            println!(
+                "  {:<40} fired {:>3}  correct {:>3.0}%  {}  [{}]",
+                a.check,
+                a.fired,
+                a.correct_rate * 100.0,
+                weight_col,
+                a.suggestion
+            );
+        }
+    }
+
+    let s = &report.session;
+    println!("\nsessions:");
+    if s.escalations == 0 {
+        println!("  no escalation events logged.");
+    } else {
+        println!(
+            "  {} escalation(s) · mean {:.1} turns to escalation · {} jumped straight to high",
+            s.escalations, s.mean_turns_to_escalation, s.jump_to_high
+        );
+        if !s.common_trajectories.is_empty() {
+            println!("  common trajectories:");
+            for (t, n) in &s.common_trajectories {
+                println!("    {t:<28} x{n}");
+            }
+        }
     }
     Ok(())
 }
