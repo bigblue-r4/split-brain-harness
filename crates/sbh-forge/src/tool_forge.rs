@@ -13,12 +13,12 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
+use crate::tool_memory::CapabilityMemory;
 use sbh_core::capability::{
     Budget, CapabilityMemoryRecord, CapabilityRequest, ToolMetrics, ToolRunReport,
 };
 use sbh_core::input_validation;
 use sbh_safety::policy::{self, PolicyState};
-use crate::tool_memory::CapabilityMemory;
 
 /// Signature for a mock tool implementation.
 ///

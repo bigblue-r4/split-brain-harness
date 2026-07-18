@@ -1,12 +1,12 @@
+use crate::static_analysis::{self, StaticAnalysisReport};
+use sbh_core::capability::CapabilityRequest;
+use sbh_core::types::Soul;
 /// Code generation layer for Phase 3 of the Ephemeral Tool Forge.
 ///
 /// Sends a CapabilityRequest to the inference engine and parses the response
 /// into a GeneratedTool with static analysis results. No compilation or
 /// execution happens here.
 use sbh_llm::InferenceEngine;
-use sbh_core::capability::CapabilityRequest;
-use crate::static_analysis::{self, StaticAnalysisReport};
-use sbh_core::types::Soul;
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------

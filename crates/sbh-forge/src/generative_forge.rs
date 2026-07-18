@@ -13,13 +13,13 @@
 ///   static analysis → test presence check → memory update
 use std::time::Instant;
 
-use sbh_llm::InferenceEngine;
-use sbh_core::capability::{Budget, CapabilityMemoryRecord, CapabilityRequest, ToolMetrics};
 use crate::code_gen::{CodeGenerator, GeneratedTool};
-use sbh_core::input_validation;
-use sbh_safety::policy::{self, PolicyState};
 use crate::tool_memory::CapabilityMemory;
+use sbh_core::capability::{Budget, CapabilityMemoryRecord, CapabilityRequest, ToolMetrics};
+use sbh_core::input_validation;
 use sbh_core::types::Soul;
+use sbh_llm::InferenceEngine;
+use sbh_safety::policy::{self, PolicyState};
 use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
@@ -234,9 +234,9 @@ fn shape_token(contract: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
     use sbh_core::capability::CapabilityConstraints;
     use sbh_safety::soul;
-    use async_trait::async_trait;
 
     // --- Mock engine helpers ---
 

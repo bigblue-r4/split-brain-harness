@@ -318,6 +318,12 @@ pub struct Metrics {
     pub auth_failures_total: AtomicU64,
     pub rate_limit_total: AtomicU64,
     pub escalations_total: AtomicU64,
+    /// Analyses that fired at least one consistency flag.
+    pub flagged_total: AtomicU64,
+    /// Analyses whose gate demanded stop_and_ask.
+    pub stop_and_ask_total: AtomicU64,
+    /// Sum of refinement iterations across analyses (avg = / requests_ok).
+    pub refinement_iterations_total: AtomicU64,
 }
 
 impl Metrics {
@@ -363,6 +369,24 @@ impl Metrics {
                 "counter",
                 "Slow-boil session escalation events detected",
                 self.escalations_total.load(Ordering::Relaxed),
+            ),
+            (
+                "sbh_flagged_total",
+                "counter",
+                "Analyses that fired at least one consistency flag",
+                self.flagged_total.load(Ordering::Relaxed),
+            ),
+            (
+                "sbh_stop_and_ask_total",
+                "counter",
+                "Analyses whose gate demanded stop_and_ask",
+                self.stop_and_ask_total.load(Ordering::Relaxed),
+            ),
+            (
+                "sbh_refinement_iterations_total",
+                "counter",
+                "Sum of refinement iterations (avg = / requests_ok_total)",
+                self.refinement_iterations_total.load(Ordering::Relaxed),
             ),
             (
                 "sbh_active_sessions",
@@ -566,6 +590,20 @@ async fn chat_completions(
                 .into_response();
         }
     };
+
+    // --- observability: detection-behavior counters (phase B) ---
+    if !result.verification.consistency_flags.is_empty() {
+        Metrics::inc(&state.metrics.flagged_total);
+    }
+    if result.verification.stop_and_ask {
+        Metrics::inc(&state.metrics.stop_and_ask_total);
+    }
+    if let Some(ref rf) = result.refinement {
+        state
+            .metrics
+            .refinement_iterations_total
+            .fetch_add(rf.iterations.len() as u64, Ordering::Relaxed);
+    }
 
     // --- session tracking: push turn, check for escalation, evict stale ---
     let (session_turn_count, session_escalating, session_log_info) = {
@@ -1011,8 +1049,8 @@ mod tests {
         let out = m.render(0, 0);
         let help_count = out.lines().filter(|l| l.starts_with("# HELP")).count();
         let type_count = out.lines().filter(|l| l.starts_with("# TYPE")).count();
-        assert_eq!(help_count, 8, "expected 8 # HELP lines");
-        assert_eq!(type_count, 8, "expected 8 # TYPE lines");
+        assert_eq!(help_count, 11, "expected 11 # HELP lines");
+        assert_eq!(type_count, 11, "expected 11 # TYPE lines");
     }
 
     // --- url_encode ---
@@ -1160,11 +1198,13 @@ mod tests {
                 confidence: 0.9,
                 disagreement: Default::default(),
                 stop_and_ask: false,
+                fired_checks: vec![],
             },
             trace: vec![],
             capability_request: None,
             obfuscation: None,
             refinement: None,
+            tool_risk: None,
         };
         let s = summarize_result(&result);
         assert!(s.contains("neutral"));

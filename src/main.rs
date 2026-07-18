@@ -28,6 +28,8 @@ async fn main() -> Result<()> {
             | Command::ExportOllama { .. }
             | Command::Calibrate { .. }
             | Command::Feedback { .. }
+            | Command::Visualize { .. }
+            | Command::TuneWeights { .. }
     );
     // --dump-prompt exits before any model call, so skip validation there too.
     let is_dump = matches!(
@@ -116,6 +118,8 @@ async fn main() -> Result<()> {
             )
             .await
         }
+        Command::Visualize { input, output } => cmd_visualize(input.as_deref(), output.as_deref()),
+        Command::TuneWeights { store } => cmd_tune_weights(&config, store.as_deref()),
         Command::Calibrate { store } => cmd_calibrate(&config, store.as_deref()),
         Command::Feedback {
             fingerprint,
@@ -181,6 +185,13 @@ enum Command {
     Feedback {
         fingerprint: String,
         correct: bool,
+        store: Option<String>,
+    },
+    Visualize {
+        input: Option<String>,
+        output: Option<String>,
+    },
+    TuneWeights {
         store: Option<String>,
     },
 }
@@ -255,6 +266,16 @@ fn parse_command(args: &[String]) -> Result<Command> {
             let tail = flag_value(args, "--tail").and_then(|s| s.parse().ok());
             let since = flag_value(args, "--since");
             return Ok(Command::Audit { tail, since });
+        }
+        Some("visualize") => {
+            // input: a trace JSON file (positional), or stdin when omitted.
+            let input = positional.get(1).map(|s| s.to_string());
+            let output = flag_value(args, "--output");
+            return Ok(Command::Visualize { input, output });
+        }
+        Some("tune-weights") => {
+            let store = flag_value(args, "--store");
+            return Ok(Command::TuneWeights { store });
         }
         Some("calibrate") => {
             let store = flag_value(args, "--store");
@@ -414,7 +435,9 @@ fn parse_command(args: &[String]) -> Result<Command> {
              Usage: split-brain-harness serve [--listen <addr>] [--session-log <path>] [--tls-cert <pem>] [--tls-key <pem>]\n\
              Usage: split-brain-harness bench <file.jsonl> [--baseline <prev.jsonl>] [--output <out.jsonl>] [--fail-on-regression]\n\
              Usage: split-brain-harness calibrate [--store <path>]\n\
-             Usage: split-brain-harness feedback --fingerprint <fp> (--correct | --misread) [--store <path>]"
+             Usage: split-brain-harness tune-weights [--store <path>]\n\
+             Usage: split-brain-harness feedback --fingerprint <fp> (--correct | --misread) [--store <path>]\n\
+             Usage: split-brain-harness visualize [<trace.json>] [--output <out.html>]   (or pipe `analyze --raw`)"
         ));
     }
 
@@ -576,7 +599,9 @@ fn print_result_pretty(r: &HarnessResult) {
     };
     println!("  {DIM}verification{R}  {supported}  {DIM}conf:{R} {conf_color}{conf:.2}{R}{sas}");
     if let Some(ref refinement) = r.refinement {
-        if refinement.iterations.len() > 1 || refinement.decision.verdict != split_brain_harness::types::ArbiterVerdict::Accept {
+        if refinement.iterations.len() > 1
+            || refinement.decision.verdict != split_brain_harness::types::ArbiterVerdict::Accept
+        {
             println!(
                 "  {DIM}refinement{R}   {} iteration(s) · {DIM}verdict:{R} {}",
                 refinement.iterations.len(),
@@ -873,6 +898,38 @@ fn cmd_audit(
 // calibrate / feedback (confidence calibration — A5)
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// visualize (offline — render a trace as self-contained HTML)
+// ---------------------------------------------------------------------------
+
+fn cmd_visualize(input: Option<&str>, output: Option<&str>) -> Result<()> {
+    use std::io::Read;
+    let json = match input {
+        Some(path) => std::fs::read_to_string(path)
+            .map_err(|e| anyhow!("cannot read trace file {path}: {e}"))?,
+        None => {
+            let mut s = String::new();
+            std::io::stdin().read_to_string(&mut s)?;
+            s
+        }
+    };
+    let result: split_brain_harness::types::HarnessResult = serde_json::from_str(json.trim())
+        .map_err(|e| {
+            anyhow!(
+                "input is not a HarnessResult JSON — pipe `analyze --raw` or `--trace` output: {e}"
+            )
+        })?;
+    let html = split_brain_harness::visualize::render_html(&result);
+    match output {
+        Some(path) => {
+            std::fs::write(path, &html).map_err(|e| anyhow!("cannot write {path}: {e}"))?;
+            eprintln!("wrote {path} ({} bytes)", html.len());
+        }
+        None => println!("{html}"),
+    }
+    Ok(())
+}
+
 fn resolve_store(
     config: &split_brain_harness::types::Config,
     store: Option<&str>,
@@ -885,10 +942,44 @@ fn resolve_store(
         })
 }
 
-fn cmd_calibrate(
+fn cmd_tune_weights(
     config: &split_brain_harness::types::Config,
     store: Option<&str>,
 ) -> Result<()> {
+    use split_brain_harness::calibration;
+    let path = resolve_store(config, store)?;
+    let entries = match calibration::read_all(&path) {
+        Ok(e) => e,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            println!("calibration store: {path}  (no entries yet)");
+            return Ok(());
+        }
+        Err(e) => return Err(anyhow!("could not read calibration store at {path}: {e}")),
+    };
+    let advice = calibration::tune_weights(&entries);
+    println!("weight-tuning advice (ADVISORY — review before changing any weight)");
+    println!("store: {path}");
+    if advice.is_empty() {
+        println!("  no labeled feedback yet — run `sbh feedback --fingerprint <fp> (--correct|--misread)`.");
+        return Ok(());
+    }
+    println!(
+        "  {:<38} {:>6} {:>8}  suggestion",
+        "check", "fired", "correct%"
+    );
+    for a in &advice {
+        println!(
+            "  {:<38} {:>6} {:>7.0}%  {}",
+            a.check,
+            a.fired,
+            a.correct_rate * 100.0,
+            a.suggestion
+        );
+    }
+    Ok(())
+}
+
+fn cmd_calibrate(config: &split_brain_harness::types::Config, store: Option<&str>) -> Result<()> {
     use split_brain_harness::calibration;
     let path = resolve_store(config, store)?;
     let entries = match calibration::read_all(&path) {
@@ -909,9 +1000,14 @@ fn cmd_calibrate(
     match calibration::fit_platt(&samples) {
         Some(params) => {
             calibration::save_params(&path, &params)?;
-            println!("  fitted Platt scaling: a={:.4} b={:.4}", params.a, params.b);
+            println!(
+                "  fitted Platt scaling: a={:.4} b={:.4}",
+                params.a, params.b
+            );
             println!("  wrote {}", calibration::params_path(&path));
-            println!("  runtime confidence will now be recalibrated when this store is configured.");
+            println!(
+                "  runtime confidence will now be recalibrated when this store is configured."
+            );
         }
         None => {
             println!(
@@ -935,9 +1031,7 @@ fn cmd_feedback(
     let entry = calibration::label_entry(fingerprint, correct);
     calibration::append(&path, &entry)
         .map_err(|e| anyhow!("could not append feedback to {path}: {e}"))?;
-    println!(
-        "recorded feedback: fingerprint={fingerprint} correct={correct} → {path}"
-    );
+    println!("recorded feedback: fingerprint={fingerprint} correct={correct} → {path}");
     Ok(())
 }
 
@@ -1248,11 +1342,13 @@ fn demo_offline_result(idx: usize) -> HarnessResult {
                 confidence: 0.93,
                 disagreement: Default::default(),
                 stop_and_ask: false,
+                fired_checks: vec![],
             },
             trace: vec![],
             capability_request: None,
             obfuscation: None,
             refinement: None,
+            tool_risk: None,
         },
         // case 1 — direct prompt injection, system exfiltration
         1 => HarnessResult {
@@ -1281,11 +1377,13 @@ fn demo_offline_result(idx: usize) -> HarnessResult {
                 confidence: 0.12,
                 disagreement: Default::default(),
                 stop_and_ask: true,
+                fired_checks: vec![],
             },
             trace: vec![],
             capability_request: None,
             obfuscation: None,
             refinement: None,
+            tool_risk: None,
         },
         // case 2 — insider threat, access scoping
         2 => HarnessResult {
@@ -1314,11 +1412,13 @@ fn demo_offline_result(idx: usize) -> HarnessResult {
                 confidence: 0.49,
                 disagreement: Default::default(),
                 stop_and_ask: true,
+                fired_checks: vec![],
             },
             trace: vec![],
             capability_request: None,
             obfuscation: None,
             refinement: None,
+            tool_risk: None,
         },
         // case 3 — foreign adversary, authority impersonation
         3 => HarnessResult {
@@ -1348,11 +1448,13 @@ fn demo_offline_result(idx: usize) -> HarnessResult {
                 confidence: 0.09,
                 disagreement: Default::default(),
                 stop_and_ask: true,
+                fired_checks: vec![],
             },
             trace: vec![],
             capability_request: None,
             obfuscation: None,
             refinement: None,
+            tool_risk: None,
         },
         // case 4 — BEC via AI proxy, financial coercion
         _ => HarnessResult {
@@ -1382,11 +1484,13 @@ fn demo_offline_result(idx: usize) -> HarnessResult {
                 confidence: 0.06,
                 disagreement: Default::default(),
                 stop_and_ask: true,
+                fired_checks: vec![],
             },
             trace: vec![],
             capability_request: None,
             obfuscation: None,
             refinement: None,
+            tool_risk: None,
         },
     }
 }
@@ -1798,8 +1902,10 @@ fn demo_serve_offline_result(idx: usize) -> HarnessResult {
                 passed: true, consistency_flags: vec![], unsupported_claims: vec![],
                 assumptions: vec![], unresolved: vec![], confidence: 0.91,
                 disagreement: Default::default(), stop_and_ask: false,
+                fired_checks: vec![],
             },
             trace: vec![], capability_request: None, obfuscation: None, refinement: None,
+            tool_risk: None,
         },
         1 => HarnessResult {
             telemetry: TelemetryResult {
@@ -1819,8 +1925,10 @@ fn demo_serve_offline_result(idx: usize) -> HarnessResult {
                 passed: true, consistency_flags: vec![], unsupported_claims: vec![],
                 assumptions: vec![], unresolved: vec![], confidence: 0.93,
                 disagreement: Default::default(), stop_and_ask: false,
+                fired_checks: vec![],
             },
             trace: vec![], capability_request: None, obfuscation: None, refinement: None,
+            tool_risk: None,
         },
         2 => HarnessResult {
             telemetry: TelemetryResult {
@@ -1843,8 +1951,10 @@ fn demo_serve_offline_result(idx: usize) -> HarnessResult {
                 ],
                 unsupported_claims: vec![], assumptions: vec![], unresolved: vec![],
                 confidence: 0.74, disagreement: Default::default(), stop_and_ask: false,
+                fired_checks: vec![],
             },
             trace: vec![], capability_request: None, obfuscation: None, refinement: None,
+            tool_risk: None,
         },
         3 => HarnessResult {
             telemetry: TelemetryResult {
@@ -1868,8 +1978,10 @@ fn demo_serve_offline_result(idx: usize) -> HarnessResult {
                 ],
                 unsupported_claims: vec![], assumptions: vec![], unresolved: vec![],
                 confidence: 0.14, disagreement: Default::default(), stop_and_ask: true,
+                fired_checks: vec![],
             },
             trace: vec![], capability_request: None, obfuscation: None, refinement: None,
+            tool_risk: None,
         },
         _ => HarnessResult {
             telemetry: TelemetryResult {
@@ -1893,8 +2005,10 @@ fn demo_serve_offline_result(idx: usize) -> HarnessResult {
                 ],
                 unsupported_claims: vec![], assumptions: vec![], unresolved: vec![],
                 confidence: 0.11, disagreement: Default::default(), stop_and_ask: true,
+                fired_checks: vec![],
             },
             trace: vec![], capability_request: None, obfuscation: None, refinement: None,
+            tool_risk: None,
         },
     }
 }

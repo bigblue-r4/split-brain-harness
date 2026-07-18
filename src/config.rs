@@ -166,7 +166,12 @@ pub fn build_config() -> Config {
             .or(file.calibration_path),
         request_rationale: std::env::var("SBH_RATIONALE")
             .ok()
-            .map(|s| matches!(s.trim().to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            .map(|s| {
+                matches!(
+                    s.trim().to_lowercase().as_str(),
+                    "1" | "true" | "yes" | "on"
+                )
+            })
             .or(file.request_rationale)
             .unwrap_or(false),
     }
@@ -379,10 +384,16 @@ mod tests {
     #[test]
     fn parse_verify_mode_maps_reconcile() {
         // Regression: "reconcile" previously fell through to Deterministic.
-        assert!(matches!(parse_verify_mode("reconcile"), VerifyMode::Reconcile));
+        assert!(matches!(
+            parse_verify_mode("reconcile"),
+            VerifyMode::Reconcile
+        ));
         assert!(matches!(parse_verify_mode("llm"), VerifyMode::Llm));
         assert!(matches!(parse_verify_mode("none"), VerifyMode::None));
-        assert!(matches!(parse_verify_mode("anything"), VerifyMode::Deterministic));
+        assert!(matches!(
+            parse_verify_mode("anything"),
+            VerifyMode::Deterministic
+        ));
     }
 
     #[test]
