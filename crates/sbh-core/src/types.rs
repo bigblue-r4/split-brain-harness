@@ -138,6 +138,9 @@ pub struct Config {
     /// capable backend when the explanation is worth the cost.
     #[serde(default)]
     pub request_rationale: bool,
+    /// Path to Formal-stage rule domains (phase F): a single `.toml` file or a
+    /// directory of them. None = the Formal stage is a no-op (no behavior change).
+    pub formal_rules_path: Option<String>,
 }
 
 fn default_temperature() -> f32 {
@@ -181,6 +184,7 @@ impl Default for Config {
             stop_and_ask_threshold: default_stop_and_ask_threshold(),
             calibration_path: None,
             request_rationale: false,
+            formal_rules_path: None,
         }
     }
 }
@@ -338,6 +342,46 @@ impl ToolRisk {
 }
 
 // ---------------------------------------------------------------------------
+// Formal-ish verification (phase F)
+// ---------------------------------------------------------------------------
+
+/// A single deterministic predicate violation raised by the Formal stage.
+/// `rule_id` is stable across runs (feeds `fired_checks` for HITL tuning, D).
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct FormalViolation {
+    pub rule_id: String,
+    /// Human-readable explanation of what the rule requires and why it fired.
+    pub message: String,
+    /// Rule-declared severity. `High` violations escalate the gate (stop_and_ask).
+    pub severity: Risk,
+}
+
+/// Result of running the Formal stage's deterministic predicate engine over the
+/// loaded rule domains. Present on `HarnessResult` only when rules are configured
+/// AND at least one rule's triggers matched — so with no rules the stage is a
+/// no-op and behavior is unchanged.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+pub struct FormalReport {
+    /// Rule domains whose triggers matched and were evaluated.
+    pub domains: Vec<String>,
+    /// Rule IDs that were evaluated (triggers matched), whether or not they violated.
+    pub checked: Vec<String>,
+    /// Violations found — empty means all evaluated rules held.
+    pub violations: Vec<FormalViolation>,
+    /// True when there were no violations among the evaluated rules.
+    pub passed: bool,
+}
+
+impl FormalReport {
+    /// True if any violation is `High` severity — the harness escalates the gate.
+    pub fn has_high_severity(&self) -> bool {
+        self.violations
+            .iter()
+            .any(|v| matches!(v.severity, Risk::High))
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Verification layer
 // ---------------------------------------------------------------------------
 
@@ -489,6 +533,10 @@ pub struct HarnessResult {
     /// Present when the input's intent touches a tool surface (phase C).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub tool_risk: Option<ToolRisk>,
+    /// Present when Formal rules are configured and at least one rule's triggers
+    /// matched (phase F). Absent when no rules are loaded or none applied.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub formal: Option<FormalReport>,
 }
 
 #[cfg(test)]

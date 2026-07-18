@@ -144,12 +144,15 @@ struct Telemetry     { … enrichment attaches here without deny_unknown_fields 
 `analyze()` becomes an ordered pipeline:
 
 ```
-Normalize → Propose → [Advocate?] → Verify → [Formal?] → Arbitrate → Calibrate
+Normalize → Propose → [Advocate?] → Verify → Arbitrate → Calibrate → Formal
 ```
 
 Each stage is independently testable, records its own **duration** (→ observability) and trace
 entries. The v1.5 refinement loop, `arbitrator`, and `calibration` become stages.
-`[Advocate?]` and `[Formal?]` are **reserved slots** (config-gated no-ops now; impls land in E/F).
+`[Advocate?]` is a **reserved slot** (config-gated no-op now; impl lands in E). **Formal (F) is
+implemented** (`stage_formal`): it runs after the reconcile loop finalizes so it sees the chosen
+iteration's telemetry + tool surface and can escalate the final gate. It is a no-op unless
+`formal_rules_path` is configured.
 
 ### 4.4 Layered config
 
@@ -167,7 +170,7 @@ four duplicated `make_config`s.
 | **C** | Tool-aware telemetry (`ToolRisk`) | classify **deterministically first** vs real `capability_request`; LLM only for the fuzz — never trust model self-report as ground truth |
 | **D** | HITL weight-tuning (`sbh tune-weights`) | extends A5 store; **advisory → reviewed → applied**, never live; poisoning-guarded |
 | **E** *(reserved)* | Debate / Devil's Advocate | fills the `Advocate` slot; reuses `ArbitratorMode::Llm` (stubbed) + `run_reconcile`; needs N-opinion arbitrator + high-stakes gate |
-| **F** *(reserved)* | Formal-ish verification | fills the `Formal` slot; facts-extractor + TOML predicate engine; engine once, domains incrementally |
+| **F** ✅ *(shipped)* | Formal-ish verification (`sbh formal-check`) | deterministic facts-extractor + TOML predicate engine (`src/formal.rs`); `formal_rules_path` config, `SBH_FORMAL_RULES` env; no-op unless configured; high-severity violations force stop_and_ask; fails **closed** on bad rule files; starter domain `rules/credential-egress.toml` |
 | **G** *(reserved)* | Meta-cognitive analyzer | **offline `sbh introspect` only**; self-modifying runtime mode is a no-go |
 
 ### Cross-cutting decisions (surfaced, not buried)
