@@ -5,7 +5,7 @@ pub use sbh_core::{capability, extractor, input_validation, types};
 
 // v2: append-only JSONL stores extracted to sbh-store; re-exported so
 // `crate::{audit,session_log,calibration}` paths resolve unchanged.
-pub use sbh_store::{audit, calibration, session_log};
+pub use sbh_store::{audit, calibration, introspect, session_log};
 
 // v2: LLM backends extracted to sbh-llm; re-exported so `crate::backends` and
 // `split_brain_harness::backends` resolve unchanged.

@@ -8,4 +8,5 @@
 
 pub mod audit;
 pub mod calibration;
+pub mod introspect;
 pub mod session_log;

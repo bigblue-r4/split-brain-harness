@@ -223,6 +223,33 @@ const TOTAL_CHECKS: usize = 8;
 /// `check_consistency`): 4 risk-mismatch checks @ 2.0 + 4 others @ 1.0.
 const TOTAL_WEIGHT: f32 = 12.0;
 
+/// (id, weight) for every deterministic consistency check, in declaration order.
+///
+/// This MUST mirror the `checks` table in [`check_consistency`]; it exists so
+/// offline tooling (`sbh introspect`) can show a check's current weight next to
+/// an advisory tuning suggestion without reaching into the closures. The
+/// `catalog_mirrors_checks` test guards count and total-weight drift.
+pub fn check_catalog() -> &'static [(&'static str, f32)] {
+    &[
+        ("emotion-intensity vs manipulation-risk", 2.0),
+        ("adversarial tone vs manipulation-risk", 2.0),
+        ("urgency vs manipulation-risk", 2.0),
+        ("input coherence", 1.0),
+        ("manipulation-risk-value", 1.0),
+        ("high-risk vs non-coercive signals", 2.0),
+        ("scope-creep / hidden-payload", 1.0),
+        ("value-alignment delta", 1.0),
+    ]
+}
+
+/// Current weight of a check by id, if known.
+pub fn check_weight(id: &str) -> Option<f32> {
+    check_catalog()
+        .iter()
+        .find(|(cid, _)| *cid == id)
+        .map(|(_, w)| *w)
+}
+
 /// Compute a structured disagreement score from the check outcomes.
 ///
 /// Reads each fired check's `dimension` and `weight` directly — no substring
@@ -703,6 +730,23 @@ async fn run_llm_verify(
 mod tests {
     use super::*;
     use crate::types::{AfferentTelemetry, CognitiveState, IntentMatrix, TelemetryResult};
+
+    #[test]
+    fn catalog_mirrors_checks() {
+        let cat = check_catalog();
+        // One entry per deterministic check…
+        assert_eq!(cat.len(), TOTAL_CHECKS, "catalog count drifted from checks");
+        // …and the weights still sum to the fixed normalizer.
+        let sum: f32 = cat.iter().map(|(_, w)| w).sum();
+        assert!(
+            (sum - TOTAL_WEIGHT).abs() < 1e-6,
+            "catalog weights sum to {sum}, expected {TOTAL_WEIGHT}"
+        );
+        // Ids are unique and resolvable via check_weight.
+        for (id, w) in cat {
+            assert_eq!(check_weight(id), Some(*w));
+        }
+    }
 
     fn confidence_from(t: &TelemetryResult, outcomes: &[CheckOutcome]) -> f32 {
         compute_disagreement_score(t, outcomes, None).adjusted_confidence
