@@ -328,6 +328,8 @@ pub struct Metrics {
     pub formal_violations_total: AtomicU64,
     /// Advocate dissents that escalated the gate (phase E).
     pub advocate_dissent_total: AtomicU64,
+    /// Total LLM calls made across all analyses (phase E.2).
+    pub llm_calls_total: AtomicU64,
 }
 
 impl Metrics {
@@ -403,6 +405,12 @@ impl Metrics {
                 "counter",
                 "Devil's-Advocate dissents that escalated the gate (phase E)",
                 self.advocate_dissent_total.load(Ordering::Relaxed),
+            ),
+            (
+                "sbh_llm_calls_total",
+                "counter",
+                "Total LLM calls made across all analyses (phase E.2)",
+                self.llm_calls_total.load(Ordering::Relaxed),
             ),
             (
                 "sbh_active_sessions",
@@ -631,6 +639,10 @@ async fn chat_completions(
             Metrics::inc(&state.metrics.advocate_dissent_total);
         }
     }
+    state
+        .metrics
+        .llm_calls_total
+        .fetch_add(result.llm_calls as u64, Ordering::Relaxed);
 
     // --- session tracking: push turn, check for escalation, evict stale ---
     let (session_turn_count, session_escalating, session_log_info) = {
@@ -1076,8 +1088,8 @@ mod tests {
         let out = m.render(0, 0);
         let help_count = out.lines().filter(|l| l.starts_with("# HELP")).count();
         let type_count = out.lines().filter(|l| l.starts_with("# TYPE")).count();
-        assert_eq!(help_count, 13, "expected 13 # HELP lines");
-        assert_eq!(type_count, 13, "expected 13 # TYPE lines");
+        assert_eq!(help_count, 14, "expected 14 # HELP lines");
+        assert_eq!(type_count, 14, "expected 14 # TYPE lines");
     }
 
     // --- url_encode ---
@@ -1234,6 +1246,7 @@ mod tests {
             tool_risk: None,
             formal: None,
             advocate: None,
+            llm_calls: 0,
         };
         let s = summarize_result(&result);
         assert!(s.contains("neutral"));

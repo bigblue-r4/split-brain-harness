@@ -131,6 +131,10 @@ pub fn render_html(r: &HarnessResult) -> String {
         "<div class=\"kv\"><span class=\"k\">injection fp</span><span class=\"v\">{}</span></div>",
         v.disagreement.injection_fingerprint
     ));
+    b.push_str(&format!(
+        "<div class=\"kv\"><span class=\"k\">llm calls</span><span class=\"v\">{}</span></div>",
+        r.llm_calls
+    ));
     b.push_str("</div>");
     b.push_str("</div>"); // grid
 
