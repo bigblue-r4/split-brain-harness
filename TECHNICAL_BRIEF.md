@@ -112,7 +112,12 @@ adversarial message.
 
 ## Benchmark Results
 
-Evaluated against three public adversarial datasets (local Ollama, llama3.2:3b, air-gapped):
+### Single-model baseline
+
+Evaluated against three public adversarial datasets (local Ollama, llama3.2:3b, air-gapped).
+Every row below is a **single-model** run at `verify_mode = deterministic`: one LLM call
+per input, with the verifier hemisphere running deterministic consistency checks only and
+making no model call of its own.
 
 | Dataset | Rows | Precision | Recall | F1 | Notes |
 |---|---|---|---|---|---|
@@ -120,8 +125,8 @@ Evaluated against three public adversarial datasets (local Ollama, llama3.2:3b, 
 | CyberEC | 141 | **1.00** | 0.50 | 0.67 | Zero false positives; FN gap: encoding-evasion attacks (see Stage 0 normalizer below) |
 | TrustAI Jailbreaks | 1,398 | n/a | n/a | n/a | Unlabeled — flagging rate **94.8%** (1,326/1,398 flagged medium or high); 72 passed as low |
 
-**Backend note:** All benchmarks run locally on llama3.2:3b via Ollama (air-gapped, no
-cloud). A 3B model has meaningful limits on complex multi-hop reasoning; Deepset's
+**Backend note:** All benchmarks in this section run locally on llama3.2:3b via Ollama
+(air-gapped, no cloud). A 3B model has meaningful limits on complex multi-hop reasoning; Deepset's
 indirect injection cases (roleplay framing, document-embedded payloads) are the primary
 FN driver. Precision holds well across all three datasets — SBH almost never fires on
 benign content. On TrustAI (1,398 unlabeled jailbreaks), 94.8% were flagged medium or
@@ -142,6 +147,14 @@ Stage 1. Tested against the 26 CyberEC false negatives:
 | Semantic jailbreaks / direct instructions | 8 | ✗ (LLM Stage 1 handles) |
 | Indirect injection (logic framing, split strings) | 3 | ✗ (LLM Stage 1 handles) |
 | Likely mislabeled (benign questions in dataset) | 2 | n/a |
+
+### Dual-model split-brain
+
+The proposer and verifier hemispheres can be pointed at different models
+(`SBH_VERIFIER_MODEL`). Whether that changes detection is being measured, not assumed —
+method, arms and statistics are in `docs/DUAL_MODEL_STUDY.md`. **No dual-model figures are
+claimed here until that study reports.** The table above is not a control for it: it made
+no verifier LLM call at all.
 
 **Remaining blind spots:**
 - Context-embedded injections (payload buried inside a document body)

@@ -32,8 +32,14 @@ pub enum VerifyMode {
     Llm,
     /// Deterministic checks + LLM verifier + a third adjudicator LLM call when the
     /// disagreement structure matches a high-risk injection fingerprint.
-    /// Inspired by ReConcile (ACL) multi-model consensus and DiscoUQ structured
-    /// disagreement scoring.
+    ///
+    /// The structure is inspired by ReConcile (ACL) multi-model consensus and
+    /// DiscoUQ structured disagreement scoring. Note what is and is not claimed:
+    /// ReConcile's result rests on *diverse* models, and SBH only became able to
+    /// run diverse models per role with `verifier_model_name` /
+    /// `adjudicator_model_name`. With those unset all three calls go to one
+    /// model, which is a self-consistency check, not a multi-model consensus.
+    /// See `docs/DUAL_MODEL_STUDY.md`.
     #[serde(rename = "reconcile")]
     Reconcile,
     /// Skip verification entirely.
