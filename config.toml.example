@@ -16,6 +16,16 @@ endpoint = "http://localhost:11434"
 # anthropic:                     claude-sonnet-4-6
 model_name = "llama3.2:3b"
 
+# Per-role model overrides. Unset (the default) means every role runs on
+# `model_name` above — identical to how SBH has always behaved.
+# Set these to run the two hemispheres on different models: the proposer stays
+# on `model_name`, the verifier and the Reconcile adjudicator take theirs here.
+# Env: SBH_VERIFIER_MODEL / SBH_ADJUDICATOR_MODEL.
+# The per-request LLM-call ceiling is shared across roles — a split run does not
+# get a larger budget than a single-model one.
+# verifier_model_name    = "qwen3.5"
+# adjudicator_model_name = "qwen3.5"
+
 # API key — required for the "anthropic" backend
 # api_key = "sk-ant-..."
 

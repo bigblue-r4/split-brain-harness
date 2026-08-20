@@ -388,6 +388,21 @@ api_key     = "sk-ant-..."
 verify_mode = "deterministic"
 ```
 
+### Split-brain across two models
+
+The proposer and verifier hemispheres can run on different models. Leave
+`SBH_VERIFIER_MODEL` unset and everything behaves as it always has — one model,
+one backend client.
+
+```bash
+SBH_MODEL=llama3.2:3b SBH_VERIFIER_MODEL=qwen3.5 sbh analyze --raw "…"
+```
+
+Every result carries a `models` block naming what served each role, so an
+artifact says what produced it rather than depending on the runner's shell
+history. The per-request LLM-call ceiling is shared across roles — a split run
+gets the same budget as a single-model one.
+
 ### Environment variables
 
 | Variable | Default | Description |
@@ -395,6 +410,8 @@ verify_mode = "deterministic"
 | `SBH_BACKEND` | `ollama-native` | Backend |
 | `SBH_ENDPOINT` | *(backend default)* | API endpoint |
 | `SBH_MODEL` | `llama3.2:3b` | Model name |
+| `SBH_VERIFIER_MODEL` | *(= `SBH_MODEL`)* | Run the verifier hemisphere on its own model |
+| `SBH_ADJUDICATOR_MODEL` | *(= `SBH_MODEL`)* | Run the Reconcile adjudicator on its own model |
 | `SBH_API_KEY` | — | API key (required for `anthropic`) |
 | `SBH_VERIFY` | `deterministic` | `deterministic` \| `llm` \| `none` |
 | `SBH_SOUL_PATH` | — | Custom soul.md path (empty = compiled-in default) |

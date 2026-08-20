@@ -1247,6 +1247,7 @@ mod tests {
             formal: None,
             advocate: None,
             llm_calls: 0,
+            models: None,
         };
         let s = summarize_result(&result);
         assert!(s.contains("neutral"));

@@ -6,6 +6,8 @@ struct FileConfig {
     backend: Option<String>,
     endpoint: Option<String>,
     model_name: Option<String>,
+    verifier_model_name: Option<String>,
+    adjudicator_model_name: Option<String>,
     soul_path: Option<String>,
     api_key: Option<String>,
     verify_mode: Option<String>,
@@ -121,6 +123,14 @@ pub fn build_config() -> Config {
             .ok()
             .or(file.model_name)
             .unwrap_or_else(|| default_model.to_string()),
+        // Per-role overrides. Absent = the role uses `model_name`, which keeps
+        // every pre-existing single-model run byte-identical.
+        verifier_model_name: std::env::var("SBH_VERIFIER_MODEL")
+            .ok()
+            .or(file.verifier_model_name),
+        adjudicator_model_name: std::env::var("SBH_ADJUDICATOR_MODEL")
+            .ok()
+            .or(file.adjudicator_model_name),
         soul_path: std::env::var("SBH_SOUL_PATH")
             .ok()
             .or(file.soul_path)
@@ -218,6 +228,27 @@ pub fn validate_config(config: &Config) -> Result<(), Vec<String>> {
 
     if config.model_name.trim().is_empty() {
         errors.push("model_name is empty — set SBH_MODEL or model_name in config.toml".into());
+    }
+
+    // A present-but-blank override would silently resolve to an empty model
+    // name at the backend, so reject it here rather than at request time.
+    for (label, env, value) in [
+        (
+            "verifier_model_name",
+            "SBH_VERIFIER_MODEL",
+            &config.verifier_model_name,
+        ),
+        (
+            "adjudicator_model_name",
+            "SBH_ADJUDICATOR_MODEL",
+            &config.adjudicator_model_name,
+        ),
+    ] {
+        if value.as_deref().is_some_and(|m| m.trim().is_empty()) {
+            errors.push(format!(
+                "{label} is set but empty — give {env} a model name or unset it to reuse model_name"
+            ));
+        }
     }
 
     if config.timeout_secs == 0 {
@@ -364,6 +395,27 @@ mod tests {
         c.model_name = "   ".into();
         let errs = validate_config(&c).unwrap_err();
         assert!(errs.iter().any(|e| e.contains("model_name")));
+    }
+
+    #[test]
+    fn blank_role_model_overrides_are_invalid() {
+        let mut c = base_config();
+        c.verifier_model_name = Some("  ".into());
+        let errs = validate_config(&c).unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("SBH_VERIFIER_MODEL")));
+
+        let mut c = base_config();
+        c.adjudicator_model_name = Some(String::new());
+        let errs = validate_config(&c).unwrap_err();
+        assert!(errs.iter().any(|e| e.contains("SBH_ADJUDICATOR_MODEL")));
+    }
+
+    #[test]
+    fn absent_role_model_overrides_are_valid() {
+        // Absent is the single-model default, not a misconfiguration.
+        let c = base_config();
+        assert!(c.verifier_model_name.is_none());
+        assert!(validate_config(&c).is_ok());
     }
 
     #[test]
