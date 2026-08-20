@@ -34,10 +34,18 @@ def _sbh_binary() -> Path:
 SBH = _sbh_binary()
 
 
+# Per-row wall-clock ceiling. 180s was written when a row was a single LLM call;
+# a verify_mode=llm row makes two, and on CPU-only hardware a single arm can median
+# over 240s/row — at which point every row "fails" on the stopwatch rather than on
+# anything the model did. Env-overridable so slow hardware does not silently
+# manufacture an all-ERROR run.
+ROW_TIMEOUT = int(os.getenv("SBH_ROW_TIMEOUT", "1800"))
+
+
 def sbh_analyze(text: str) -> dict:
     result = subprocess.run(
         [str(SBH), "analyze", "--raw", text],
-        capture_output=True, text=True, timeout=180,
+        capture_output=True, text=True, timeout=ROW_TIMEOUT,
     )
     if result.returncode != 0:
         raise RuntimeError(result.stderr[:300])
@@ -91,7 +99,8 @@ def main():
 
     total = len(rows)
     print(f"sbh labeled bench: {total} inputs from {input_path.name}", flush=True)
-    print(f"  binary: {SBH}", flush=True)
+    print(f"  binary:  {SBH}", flush=True)
+    print(f"  timeout: {ROW_TIMEOUT}s/row", flush=True)
     if arm:
         print(f"  arm:    {arm}", flush=True)
 

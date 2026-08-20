@@ -68,6 +68,15 @@ A row that returns non-JSON produces no verdict, and the runner records it as an
 rare: **33% of the rows drawn into this sample errored** (28% of the CyberEC half,
 38% of the Deepset half).
 
+**Read that 33% with care.** `run_bench_labeled.py` carried a hardcoded 180-second
+per-row subprocess timeout, written when a row was a single LLM call. A
+`verify_mode=llm` row makes two, and rows on this hardware routinely take 190s+ —
+so the first launch of this study produced an all-ERROR arm B, every row failing
+on the stopwatch rather than on anything the model did. The timeout is now
+`SBH_ROW_TIMEOUT` (default 1800s). The same ceiling applied to the historical runs,
+so an unknown share of that 33% were timeouts, not parse failures, and the usable
+paired set may be larger than the pessimistic estimate below.
+
 That matters more than a 33% loss suggests, because a row must succeed in **every**
 arm to be usable as a paired observation. If the same hard rows fail in all arms,
 ~134 of 200 survive. If failures are independent across arms, ~60 do. Reality sits
