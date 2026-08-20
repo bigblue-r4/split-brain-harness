@@ -6,6 +6,7 @@ For labeled datasets (e.g. deepset/prompt-injections) where each row has a
 
 Usage:
     python3 scripts/run_bench_labeled.py <input.jsonl> [--output <out.jsonl>] [--limit N]
+                                        [--arm LABEL] [--resume]
 
 Positive class: any label that is NOT "benign" (injection, jailbreak, attack, …)
 sbh positive:   manipulation_risk = medium or high
@@ -19,7 +20,18 @@ import sys
 import time
 from pathlib import Path
 
-SBH = Path(__file__).parent.parent / "target" / "debug" / "split-brain-harness"
+def _sbh_binary() -> Path:
+    """Prefer the release build — a debug binary is several times slower, which
+    matters when a run is measured in hours."""
+    root = Path(__file__).parent.parent
+    override = os.getenv("SBH_BINARY")
+    if override:
+        return Path(override)
+    release = root / "target" / "release" / "split-brain-harness"
+    return release if release.exists() else root / "target" / "debug" / "split-brain-harness"
+
+
+SBH = _sbh_binary()
 
 
 def sbh_analyze(text: str) -> dict:
@@ -47,6 +59,11 @@ def main():
         limit = int(args[args.index("--limit") + 1])
 
     resume = "--resume" in args
+    # Study-arm label, recorded on every row so arms stay distinguishable after
+    # the files are merged.
+    arm = None
+    if "--arm" in args:
+        arm = args[args.index("--arm") + 1]
 
     rows = []
     with open(input_path) as f:
@@ -66,12 +83,17 @@ def main():
                 line = line.strip()
                 if line:
                     r = json.loads(line)
+                    if r.get("outcome") == "ERROR":
+                        continue  # retry errored rows on resume
                     done_texts.add(r["text"])
                     prior_results.append(r)
         print(f"  resume: skipping {len(done_texts)} already-done inputs", flush=True)
 
     total = len(rows)
     print(f"sbh labeled bench: {total} inputs from {input_path.name}", flush=True)
+    print(f"  binary: {SBH}", flush=True)
+    if arm:
+        print(f"  arm:    {arm}", flush=True)
 
     results = list(prior_results)
     tp = sum(1 for r in prior_results if r["outcome"] == "TP")
@@ -126,14 +148,39 @@ def main():
                 "flags": sbh["verification"]["consistency_flags"],
                 "elapsed_s": round(elapsed, 2),
             }
+            # Provenance comes from the binary's own `models` block, not from
+            # this runner's environment — the row then says what produced it
+            # even after the shell that launched it is gone.
+            if arm:
+                entry["arm"] = arm
+            if sbh.get("models"):
+                entry["models"] = sbh["models"]
+            entry["llm_calls"] = sbh.get("llm_calls")
             results.append(entry)
             if out_file:
                 out_file.write(json.dumps(entry) + "\n")
+                out_file.flush()
 
         except Exception as e:
             elapsed = time.time() - t0
             errors += 1
             print(f"  [{i:>4}/{total}] ERROR  {elapsed:.1f}s  {e}", flush=True)
+            # Record the failure too. Dropping errored rows silently would let
+            # two arms be compared over different row sets.
+            if out_file:
+                err_entry = {
+                    "text": text,
+                    "true_label": true_label,
+                    "risk": None,
+                    "outcome": "ERROR",
+                    "error": str(e)[:300],
+                    "flags": [],
+                    "elapsed_s": round(elapsed, 2),
+                }
+                if arm:
+                    err_entry["arm"] = arm
+                out_file.write(json.dumps(err_entry) + "\n")
+                out_file.flush()
 
     if out_file:
         out_file.close()
