@@ -61,6 +61,27 @@ most of their rows and so have more power than that, but if the real effect is
 small, 200 rows will not settle it and the honest reporting is "inconclusive at
 this n" plus what a sufficient n would be.
 
+## Parse failures shrink the paired set — plan for it
+
+A row that returns non-JSON produces no verdict, and the runner records it as an
+`ERROR` rather than scoring it. In the original single-model run this was not
+rare: **33% of the rows drawn into this sample errored** (28% of the CyberEC half,
+38% of the Deepset half).
+
+That matters more than a 33% loss suggests, because a row must succeed in **every**
+arm to be usable as a paired observation. If the same hard rows fail in all arms,
+~134 of 200 survive. If failures are independent across arms, ~60 do. Reality sits
+between, and it is only knowable after the run.
+
+Two consequences, both deliberate:
+
+- **The sample is over-drawn rather than pre-filtered.** Screening to rows that
+  parsed cleanly last time would bias toward inputs llama3.2:3b happens to handle,
+  and would not transfer to arm D, where qwen3.5 is the proposer.
+- **The per-arm error rate is reported as a result, not as bookkeeping.** "Does
+  the proposer model change how often telemetry parses at all?" is a real finding,
+  and burying it would overstate whichever arm failed more often.
+
 ## Environment
 
 Single box, CPU-only inference (no GPU — Ollama reports `size_vram 0`), Ollama
