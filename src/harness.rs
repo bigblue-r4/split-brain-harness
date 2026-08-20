@@ -582,8 +582,10 @@ impl<'e> Harness<'e> {
                 &effective_input,
                 &telemetry,
                 &self.transformer.soul,
-                &verifier_engine,
-                &adjudicator,
+                &verifier::VerifyEngines {
+                    verifier: &verifier_engine,
+                    adjudicator: &adjudicator,
+                },
                 &self.config.verify_mode,
                 self.config.temperature,
                 self.config.stop_and_ask_threshold,
