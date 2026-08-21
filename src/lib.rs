@@ -49,7 +49,9 @@ use types::{Config, HarnessResult};
 /// runs the full two-stage pipeline, returns a HarnessResult.
 pub async fn analyze(input: &str, config: &Config) -> Result<HarnessResult> {
     let loaded_soul = soul::load(Some(&config.soul_path))?;
-    let engine = backends::init_engine(config);
+    // Per-role engines: with no SBH_VERIFIER_MODEL / SBH_ADJUDICATOR_MODEL set
+    // this builds exactly one backend client and behaves as it always has.
+    let engines = backends::init_engines(config);
 
     let policy = transformer::TransformPolicy {
         request_rationale: config.request_rationale,
@@ -68,7 +70,7 @@ pub async fn analyze(input: &str, config: &Config) -> Result<HarnessResult> {
         t
     };
 
-    let h = harness::Harness::new_with_transformer(t, engine.as_ref(), config);
+    let h = harness::Harness::new_with_transformer_and_engines(t, &engines, config);
     h.analyze(input).await
 }
 

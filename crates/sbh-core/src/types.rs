@@ -32,8 +32,14 @@ pub enum VerifyMode {
     Llm,
     /// Deterministic checks + LLM verifier + a third adjudicator LLM call when the
     /// disagreement structure matches a high-risk injection fingerprint.
-    /// Inspired by ReConcile (ACL) multi-model consensus and DiscoUQ structured
-    /// disagreement scoring.
+    ///
+    /// The structure is inspired by ReConcile (ACL) multi-model consensus and
+    /// DiscoUQ structured disagreement scoring. Note what is and is not claimed:
+    /// ReConcile's result rests on *diverse* models, and SBH only became able to
+    /// run diverse models per role with `verifier_model_name` /
+    /// `adjudicator_model_name`. With those unset all three calls go to one
+    /// model, which is a self-consistency check, not a multi-model consensus.
+    /// See `docs/DUAL_MODEL_STUDY.md`.
     #[serde(rename = "reconcile")]
     Reconcile,
     /// Skip verification entirely.
@@ -104,6 +110,15 @@ pub struct Config {
     pub backend: BackendType,
     pub endpoint: String,
     pub model_name: String,
+    /// Model for the verifier hemisphere. `None` = use `model_name`, which is
+    /// the historical single-model behaviour. Set it to run the two hemispheres
+    /// on different models (env: `SBH_VERIFIER_MODEL`).
+    #[serde(default)]
+    pub verifier_model_name: Option<String>,
+    /// Model for the Reconcile adjudicator call. `None` = use `model_name`.
+    /// (env: `SBH_ADJUDICATOR_MODEL`).
+    #[serde(default)]
+    pub adjudicator_model_name: Option<String>,
     pub soul_path: String,
     pub api_key: Option<String>,
     pub verify_mode: VerifyMode,
@@ -201,6 +216,8 @@ impl Default for Config {
             backend: BackendType::OllamaNative,
             endpoint: "http://localhost:11434".into(),
             model_name: "llama3.2:3b".into(),
+            verifier_model_name: None,
+            adjudicator_model_name: None,
             soul_path: String::new(),
             api_key: None,
             verify_mode: VerifyMode::Deterministic,
@@ -611,6 +628,25 @@ pub struct HarnessResult {
     /// `sbh_llm_calls_total` metric and surfaces call stacking in the trace.
     #[serde(default)]
     pub llm_calls: usize,
+    /// Which model served each role, so a result says what produced it instead
+    /// of relying on the runner's environment to remember. Absent on offline
+    /// demo results and synthetic fixtures, which called no model at all.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub models: Option<ModelProvenance>,
+}
+
+/// The models behind one analysis. Roles without an override repeat
+/// `proposer`; `adjudicator` names the model that *would* serve a Reconcile
+/// adjudication, which only fires on a high-risk disagreement fingerprint.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelProvenance {
+    pub proposer: String,
+    pub verifier: String,
+    pub adjudicator: String,
+    pub verify_mode: String,
+    pub temperature: f32,
+    /// True when the hemispheres ran on different models.
+    pub split: bool,
 }
 
 #[cfg(test)]

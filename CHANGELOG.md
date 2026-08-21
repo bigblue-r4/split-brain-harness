@@ -4,6 +4,34 @@ All notable changes to split-brain-harness are documented here.
 
 ---
 
+## [Unreleased]
+
+### Added
+
+**Per-role models — the two hemispheres can run on different models**
+- `SBH_VERIFIER_MODEL` / `SBH_ADJUDICATOR_MODEL` (config: `verifier_model_name`,
+  `adjudicator_model_name`) route the verifier hemisphere and the Reconcile
+  adjudicator to models of their own. Unset — the default — means every role uses
+  `model_name`, builds exactly one backend client, and behaves exactly as before.
+- The per-request LLM-call ceiling is shared across roles: a split-brain run gets
+  the same budget as a single-model one, not one per engine.
+- Results carry a `models` block (`proposer` / `verifier` / `adjudicator` /
+  `verify_mode` / `temperature` / `split`) so an artifact records what produced it.
+  It reports the engines actually wired, not the config — an override with no
+  engine set behind it is not reported as a split.
+- Study tooling: `scripts/make_sample.py` (fixed label-balanced sample),
+  `scripts/run_arms.sh` (arms B/C/D), `scripts/probe_arms.py` (wall-clock probe),
+  and `scripts/compare_arms.py` (paired metrics + McNemar's exact test).
+  `run_bench_labeled.py` records per-row provenance and an `--arm` label.
+
+### Note
+
+Prior benchmark tables in this repo are single-model runs at
+`verify_mode = deterministic` — the verifier hemisphere made no LLM call at all.
+They are not a control for a dual-model comparison; see `docs/DUAL_MODEL_STUDY.md`.
+
+---
+
 ## [1.3.0] — 2026-07-18
 
 The first release since 1.2.0. It bundles the **v1.5 active-reconciliation loop**,

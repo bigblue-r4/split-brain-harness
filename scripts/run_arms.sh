@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Run the dual-model study arms over the fixed sample.
+#
+# Arms B/C/D all run at SBH_VERIFY=llm and SBH_REFINE_ITERS=1: one propose call
+# and one verify call per row. Refinement is pinned off deliberately — it fires a
+# variable number of extra calls depending on which flags trip, which would make
+# both the cost and the behaviour differ between arms for reasons unrelated to
+# which model verified.
+#
+# Arm A (the published baseline) is deterministic-verify and already on disk;
+# it is a reference point, not the control. The control is arm B.
+#
+# Usage: ./scripts/run_arms.sh [--resume] [arm ...]     e.g. ./scripts/run_arms.sh B C
+set -uo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SAMPLE="$ROOT/fixtures/dualmodel_sample.jsonl"
+
+RESUME=""
+ARMS=()
+for a in "$@"; do
+  if [[ "$a" == "--resume" ]]; then RESUME="--resume"; else ARMS+=("$a"); fi
+done
+[[ ${#ARMS[@]} -eq 0 ]] && ARMS=(B C D)
+
+export SBH_BACKEND=ollama-native
+export SBH_VERIFY=llm
+export SBH_REFINE_ITERS=1
+export SBH_TIMEOUT_SECONDS=1800
+
+for arm in "${ARMS[@]}"; do
+  case "$arm" in
+    B) PROPOSER=llama3.2:3b; VERIFIER=llama3.2:3b ;;
+    C) PROPOSER=llama3.2:3b; VERIFIER=qwen3.5     ;;
+    D) PROPOSER=qwen3.5;     VERIFIER=llama3.2:3b ;;
+    *) echo "unknown arm: $arm (want B, C or D)"; exit 1 ;;
+  esac
+
+  export SBH_MODEL="$PROPOSER"
+  if [[ "$VERIFIER" == "$PROPOSER" ]]; then
+    unset SBH_VERIFIER_MODEL
+  else
+    export SBH_VERIFIER_MODEL="$VERIFIER"
+  fi
+
+  OUT="$ROOT/fixtures/dualmodel_arm${arm}.jsonl"
+  echo "=== arm $arm: proposer=$PROPOSER verifier=$VERIFIER -> $(basename "$OUT") ==="
+  python3 "$ROOT/scripts/run_bench_labeled.py" "$SAMPLE" \
+    --output "$OUT" --arm "$arm" $RESUME
+  echo
+done
+
+echo ">>> arms done — compare with:"
+echo "    python3 scripts/compare_arms.py fixtures/dualmodel_arm{B,C,D}.jsonl"

@@ -1,6 +1,6 @@
 use crate::adaptor::{self, PackSelection};
 use crate::arbitrator;
-use crate::backends::InferenceEngine;
+use crate::backends::{Engines, InferenceEngine, Role};
 use crate::capability::CapabilityRequest;
 use crate::context_packs::ContextPack;
 use crate::input_validation;
@@ -10,8 +10,8 @@ use crate::security;
 use crate::transformer::SplitBrainTransformer;
 use crate::types::{
     AfferentTelemetry, ArbiterVerdict, ArbitratorMode, CognitiveState, Config, HarnessResult,
-    IntentMatrix, ObfuscationReport, RefinementIteration, RefinementTrace, Soul, TelemetryResult,
-    TraceEntry, VerificationReport,
+    IntentMatrix, ModelProvenance, ObfuscationReport, RefinementIteration, RefinementTrace, Soul,
+    TelemetryResult, TraceEntry, VerificationReport,
 };
 use crate::verifier;
 use anyhow::{anyhow, Result};
@@ -19,6 +19,9 @@ use anyhow::{anyhow, Result};
 pub struct Harness<'e> {
     transformer: SplitBrainTransformer,
     engine: &'e dyn InferenceEngine,
+    /// Per-role engine set. `None` = every role runs on `engine`, which is the
+    /// historical single-model behaviour and what every existing caller gets.
+    engines: Option<&'e Engines>,
     config: &'e Config,
     /// Formal-stage rule domains (phase F), loaded once from
     /// `config.formal_rules_path`. Empty when no path is configured.
@@ -73,6 +76,22 @@ impl<'e> Harness<'e> {
         Self {
             transformer: SplitBrainTransformer::new(soul),
             engine,
+            engines: None,
+            config,
+            formal_rules,
+            formal_error,
+        }
+    }
+
+    /// Create with a per-role engine set, so the proposer and verifier
+    /// hemispheres can run on different models. The proposer engine is used for
+    /// any role without an override.
+    pub fn new_with_engines(soul: Soul, engines: &'e Engines, config: &'e Config) -> Self {
+        let (formal_rules, formal_error) = load_formal_rules(config);
+        Self {
+            transformer: SplitBrainTransformer::new(soul),
+            engine: engines.for_role(Role::Proposer),
+            engines: Some(engines),
             config,
             formal_rules,
             formal_error,
@@ -89,6 +108,24 @@ impl<'e> Harness<'e> {
         Self {
             transformer,
             engine,
+            engines: None,
+            config,
+            formal_rules,
+            formal_error,
+        }
+    }
+
+    /// `new_with_transformer` plus a per-role engine set.
+    pub fn new_with_transformer_and_engines(
+        transformer: SplitBrainTransformer,
+        engines: &'e Engines,
+        config: &'e Config,
+    ) -> Self {
+        let (formal_rules, formal_error) = load_formal_rules(config);
+        Self {
+            transformer,
+            engine: engines.for_role(Role::Proposer),
+            engines: Some(engines),
             config,
             formal_rules,
             formal_error,
@@ -127,7 +164,10 @@ impl<'e> Harness<'e> {
         // Per-request LLM-call budget (E.2): every engine.generate for this
         // analysis funnels through this meter — it counts and (when configured)
         // caps calls across propose, verify, refinement, and advocate.
-        let engine = MeteredEngine::new(self.engine, self.config.max_llm_calls_per_request);
+        let engine = match self.engines {
+            Some(e) => MeteredEngine::new_roles(e, self.config.max_llm_calls_per_request),
+            None => MeteredEngine::new(self.engine, self.config.max_llm_calls_per_request),
+        };
 
         let t = std::time::Instant::now();
         self.stage_normalize(&mut ctx);
@@ -210,7 +250,26 @@ impl<'e> Harness<'e> {
             formal,
             advocate,
             llm_calls,
+            models: Some(self.model_provenance()),
         })
+    }
+
+    /// What each role actually called. With no per-role engine set every role
+    /// runs on `model_name`, regardless of what the config's override fields
+    /// say — so this reads the engines, not the config alone.
+    fn model_provenance(&self) -> ModelProvenance {
+        let name = |role: Role| match self.engines {
+            Some(_) => crate::backends::resolved_model(self.config, role).to_string(),
+            None => self.config.model_name.clone(),
+        };
+        ModelProvenance {
+            proposer: name(Role::Proposer),
+            verifier: name(Role::Verifier),
+            adjudicator: name(Role::Adjudicator),
+            verify_mode: self.config.verify_mode.to_string(),
+            temperature: self.config.temperature,
+            split: self.engines.is_some_and(|e| e.is_split()),
+        }
     }
 
     /// Devil's-Advocate stage (phase E) — gated adversarial LLM pass. Returns the
@@ -463,8 +522,13 @@ impl<'e> Harness<'e> {
     async fn stage_reconcile(
         &self,
         ctx: &mut PipelineCtx,
-        engine: &dyn InferenceEngine,
+        engine: &MeteredEngine<'_>,
     ) -> Result<()> {
+        // One view per hemisphere. Both charge the same budget, so a split-brain
+        // run gets the same call ceiling as a single-model one.
+        let proposer = engine.role_view(Role::Proposer);
+        let verifier_engine = engine.role_view(Role::Verifier);
+        let adjudicator = engine.role_view(Role::Adjudicator);
         let effective_input = ctx.effective_input.clone();
         let do_refine = matches!(self.config.arbitrator, ArbitratorMode::Rules)
             && self.config.refine_max_iters > 1;
@@ -485,7 +549,7 @@ impl<'e> Harness<'e> {
 
         for i in 0..max_iters {
             let (telemetry, capability_request, propose_entries, is_fallback) = self
-                .run_propose(engine, &effective_input, feedback.as_deref())
+                .run_propose(&proposer, &effective_input, feedback.as_deref())
                 .await?;
             ctx.trace.extend(propose_entries);
 
@@ -518,7 +582,10 @@ impl<'e> Harness<'e> {
                 &effective_input,
                 &telemetry,
                 &self.transformer.soul,
-                engine,
+                &verifier::VerifyEngines {
+                    verifier: &verifier_engine,
+                    adjudicator: &adjudicator,
+                },
                 &self.config.verify_mode,
                 self.config.temperature,
                 self.config.stop_and_ask_threshold,
@@ -1038,6 +1105,64 @@ mod tests {
             "coherence_rating": 0.15
         }
     }"#;
+
+    #[tokio::test]
+    async fn provenance_reports_one_model_when_not_split() {
+        let engine = MockEngine {
+            response: VALID_JSON.into(),
+        };
+        let config = make_config();
+        let soul = crate::soul::load(None).unwrap();
+        let h = Harness::new(soul, &engine, &config);
+        let models = h.analyze("hello").await.unwrap().models.unwrap();
+        assert_eq!(models.proposer, "test");
+        assert_eq!(models.verifier, "test");
+        assert_eq!(models.adjudicator, "test");
+        assert!(!models.split);
+    }
+
+    #[tokio::test]
+    async fn provenance_names_each_hemisphere_when_split() {
+        let config = Config {
+            verifier_model_name: Some("other-model".into()),
+            ..make_config()
+        };
+        let engines = crate::backends::Engines::new(
+            Box::new(MockEngine {
+                response: VALID_JSON.into(),
+            }),
+            Some(Box::new(MockEngine {
+                response: VALID_JSON.into(),
+            })),
+            None,
+        );
+        let soul = crate::soul::load(None).unwrap();
+        let h = Harness::new_with_engines(soul, &engines, &config);
+        let models = h.analyze("hello").await.unwrap().models.unwrap();
+        assert_eq!(models.proposer, "test");
+        assert_eq!(models.verifier, "other-model");
+        // Unset adjudicator follows the proposer.
+        assert_eq!(models.adjudicator, "test");
+        assert!(models.split);
+    }
+
+    #[tokio::test]
+    async fn config_override_without_an_engine_set_is_not_reported_as_split() {
+        // A single-engine Harness ignores the override, so provenance must not
+        // claim a split that never reached the backend.
+        let engine = MockEngine {
+            response: VALID_JSON.into(),
+        };
+        let config = Config {
+            verifier_model_name: Some("other-model".into()),
+            ..make_config()
+        };
+        let soul = crate::soul::load(None).unwrap();
+        let h = Harness::new(soul, &engine, &config);
+        let models = h.analyze("hello").await.unwrap().models.unwrap();
+        assert_eq!(models.verifier, "test");
+        assert!(!models.split);
+    }
 
     fn make_config() -> Config {
         Config {
