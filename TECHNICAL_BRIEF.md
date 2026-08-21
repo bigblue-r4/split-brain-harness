@@ -119,18 +119,81 @@ Every row below is a **single-model** run at `verify_mode = deterministic`: one 
 per input, with the verifier hemisphere running deterministic consistency checks only and
 making no model call of its own.
 
-| Dataset | Rows | Precision | Recall | F1 | Notes |
-|---|---|---|---|---|---|
-| Deepset Prompt Injections | 546 | **0.81** | 0.37 | 0.51 | Local llama3.2:3b backend; 117/546 parse-timeout errors excluded. FN gap: indirect/roleplay injections requiring multi-hop reasoning. |
-| CyberEC | 141 | **1.00** | 0.50 | 0.67 | Zero false positives; FN gap: encoding-evasion attacks (see Stage 0 normalizer below) |
-| TrustAI Jailbreaks | 1,398 | n/a | n/a | n/a | Unlabeled — flagging rate **94.8%** (1,326/1,398 flagged medium or high); 72 passed as low |
+| Dataset | Inputs | Scored | Precision | Recall | F1 | Notes |
+|---|---|---|---|---|---|---|
+| Deepset Prompt Injections | 546 | 514 | **0.922** | 0.408 | 0.566 | 32 genuine parse failures excluded. FN gap: indirect/roleplay injections requiring multi-hop reasoning. |
+| CyberEC | 200 | 198 | **1.000** | 0.571 | 0.727 | Zero false positives. 2 genuine parse failures excluded. FN gap: encoding-evasion attacks (see Stage 0 normalizer below) |
+| TrustAI Jailbreaks | 1,398 | — | n/a | n/a | n/a | Unlabeled — flagging rate **94.8%** (1,326/1,398 flagged medium or high). ⚠ Not yet re-measured; see correction note. |
+
+**Correction (2026-08-21).** The figures above replace an earlier set that was wrong in
+both directions, and the reason is worth stating plainly because it changes how the
+"excluded" column should be read.
+
+The benchmark runner discarded any row where the harness set `stop_and_ask`, recording it
+with the message *"parse_failure — model returned non-JSON"*. Those rows had parsed
+correctly. `stop_and_ask` is SBH escalating to a human — the harness working, not failing —
+and each discarded row still carried a `manipulation_risk` verdict that was thrown away.
+
+Re-running both labeled datasets with the fix, changing nothing else:
+
+| | was | now | rows recovered | genuinely unparseable |
+|---|---|---|---|---|
+| CyberEC | 141 scored · P 1.000 · R 0.500 · F1 0.667 | 198 scored · P 1.000 · R 0.571 · F1 0.727 | 57 (46 injection) | 2 of 59 |
+| Deepset | 416 scored · P 0.857 · R 0.313 · F1 0.459 | 514 scored · P 0.922 · R 0.408 · F1 0.566 | 98 (82 injection) | 32 of 130 |
+
+**Almost none of the discarded rows were parse failures** — 2 of 59 on CyberEC, 32 of 130
+on Deepset. The rest were escalations. Both datasets understated the system, and the
+"zero false positives" result on CyberEC now rests on 198 rows rather than 141.
+
+Two further discrepancies found while correcting this, neither introduced by the bug:
+
+- The previously published Deepset row read `0.81 / 0.37 / 0.51` with "117/546
+  parse-timeout errors". Recomputing directly from the stored artifact
+  (`fixtures/deepset_sbh_results.jsonl`) gives `0.857 / 0.313 / 0.459` over 416 scored
+  rows, i.e. 130 excluded. **The published row did not reconcile with its own data file.**
+  The "was" column above uses the artifact, not the old table.
+- The CyberEC row was labelled 141 rows, which was the count that survived exclusion, not
+  the dataset size. The dataset is 200 inputs.
+
+### Escalation rate
+
+`stop_and_ask` is not an error and is now reported rather than discarded. It is
+concentrated on adversarial input:
+
+| Dataset | Escalated | Of which injection |
+|---|---|---|
+| CyberEC | 72 / 198 (36%) | 65 |
+| Deepset | 96 / 514 (19%) | 79 |
+
+The headline rows above score on `manipulation_risk` alone and count an escalation as
+whatever the risk field said. Because that choice moves recall a long way, both alternative
+readings are reported rather than one being chosen silently:
+
+| Dataset | Scoring | Precision | Recall | F1 |
+|---|---|---|---|---|
+| CyberEC | risk-only *(headline)* | 1.000 | 0.571 | 0.727 |
+| CyberEC | escalation counts as a catch | 0.921 | 0.837 | 0.877 |
+| CyberEC | escalation counts as a non-answer | 1.000 | 0.173 | 0.296 |
+| Deepset | risk-only *(headline)* | 0.922 | 0.408 | 0.566 |
+| Deepset | escalation counts as a catch | 0.836 | 0.644 | 0.727 |
+| Deepset | escalation counts as a non-answer | 0.868 | 0.190 | 0.311 |
+
+Recall on identical data spans 0.17 to 0.84 depending on the reading, so any single figure
+quoted without its convention is not interpretable. The defensible claim is narrower than
+the best row: **SBH rarely clears a threat silently — it either flags it or refuses to
+clear it.** That is only a security property where a human is actually in the loop
+downstream, which is a deployment claim, not a benchmark result.
+
+Reproduce: `python3 scripts/run_bench_labeled.py fixtures/<dataset>.jsonl --output <out>`
+(artifacts: `fixtures/{cyberec,deepset}_sbh_results_fixedrunner.jsonl`).
 
 **Backend note:** All benchmarks in this section run locally on llama3.2:3b via Ollama
 (air-gapped, no cloud). A 3B model has meaningful limits on complex multi-hop reasoning; Deepset's
 indirect injection cases (roleplay framing, document-embedded payloads) are the primary
-FN driver. Precision holds well across all three datasets — SBH almost never fires on
-benign content. On TrustAI (1,398 unlabeled jailbreaks), 94.8% were flagged medium or
-high. CyberEC precision is perfect — every alert was a real injection.
+FN driver. Precision holds well across both labeled datasets — SBH almost never fires on
+benign content. CyberEC precision is perfect — every alert was a real injection, across
+198 scored rows. The TrustAI flagging rate predates the runner fix and has not been
+re-measured.
 
 **Stage 0 normalizer (added post-baseline):** A deobfuscation pass now runs before
 Stage 1. Tested against the 26 CyberEC false negatives:

@@ -126,10 +126,25 @@ def main():
         try:
             sbh = sbh_analyze(text)
             elapsed = time.time() - t0
-            # Treat model parse failures as errors — they don't carry signal
+
+            # Two conditions that used to be collapsed into one, and mislabelled:
+            #
+            #   parse_failure — the model returned non-JSON. No verdict exists.
+            #                   Genuinely an error; nothing to score.
+            #   stop_and_ask  — the model parsed fine and SBH escalated to a human.
+            #                   That is the harness working, not failing, and it
+            #                   still carries a manipulation_risk verdict.
+            #
+            # Under verify_mode=deterministic stop_and_ask is rare, so conflating
+            # them cost little. Under verify_mode=llm the verifier challenges the
+            # proposer constantly and it fires on most adversarial rows — dropping
+            # them discards the majority of the injection class and leaves an
+            # easy-subset bias that flatters recall. So: record both flags, keep
+            # the verdict, and let scoring decide at analysis time.
             tone = sbh["telemetry"]["affective_telemetry"].get("structural_tone", [])
-            if "parse_failure" in tone or sbh["verification"].get("stop_and_ask"):
+            if "parse_failure" in tone:
                 raise RuntimeError("parse_failure — model returned non-JSON")
+            stop_and_ask = bool(sbh["verification"].get("stop_and_ask"))
             risk = sbh["telemetry"]["intent_matrix"]["manipulation_risk"]
             sbh_positive = risk in ("medium", "high")
 
@@ -143,8 +158,9 @@ def main():
                 outcome, tn = "TN", tn + 1
 
             flag = "  ←" if outcome in ("FP", "FN") else ""
+            ask = " ASK" if stop_and_ask else "    "
             print(
-                f"  [{i:>4}/{total}] {outcome}  sbh={risk:<6}  true={true_label:<10}  "
+                f"  [{i:>4}/{total}] {outcome}{ask}  sbh={risk:<6}  true={true_label:<10}  "
                 f"{elapsed:.1f}s  {text[:60]}{flag}",
                 flush=True,
             )
@@ -156,6 +172,9 @@ def main():
                 "outcome": outcome,
                 "flags": sbh["verification"]["consistency_flags"],
                 "elapsed_s": round(elapsed, 2),
+                # Recorded, never applied here — compare_arms.py scores both ways.
+                "stop_and_ask": stop_and_ask,
+                "confidence": sbh["verification"].get("confidence"),
             }
             # Provenance comes from the binary's own `models` block, not from
             # this runner's environment — the row then says what produced it
@@ -211,6 +230,11 @@ def main():
     print(f"    FP (false alarm):          {fp:>4}")
     print(f"    FN (missed threat):        {fn:>4}")
     print()
+    asked = sum(1 for r in results if r.get("stop_and_ask"))
+    if asked:
+        print(f"    escalated (stop_and_ask):  {asked:>4}  "
+              f"— scored above on manipulation_risk alone; see compare_arms.py")
+        print()
     print(f"  Precision:  {precision:.3f}   ({tp}/{tp+fp} sbh-positives correct)")
     print(f"  Recall:     {recall:.3f}   ({tp}/{tp+fn} true threats caught)")
     print(f"  F1:         {f1:.3f}")
