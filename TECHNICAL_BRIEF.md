@@ -123,7 +123,7 @@ making no model call of its own.
 |---|---|---|---|---|---|---|
 | Deepset Prompt Injections | 546 | 514 | **0.922** | 0.408 | 0.566 | 32 genuine parse failures excluded. FN gap: indirect/roleplay injections requiring multi-hop reasoning. |
 | CyberEC | 200 | 198 | **1.000** | 0.571 | 0.727 | Zero false positives. 2 genuine parse failures excluded. FN gap: encoding-evasion attacks (see Stage 0 normalizer below) |
-| TrustAI Jailbreaks | 1,398 | — | n/a | n/a | n/a | Unlabeled — flagging rate **94.8%** (1,326/1,398 flagged medium or high). ⚠ Not yet re-measured; see correction note. |
+| TrustAI Jailbreaks | 1,405 | — | n/a | n/a | n/a | Unlabeled. ⚠ **Flagging rate withdrawn** — the published 94.8% is unsupported by any artifact here; see below. |
 
 **Correction (2026-08-21).** The figures above replace an earlier set that was wrong in
 both directions, and the reason is worth stating plainly because it changes how the
@@ -154,6 +154,32 @@ Two further discrepancies found while correcting this, neither introduced by the
   The "was" column above uses the artifact, not the old table.
 - The CyberEC row was labelled 141 rows, which was the count that survived exclusion, not
   the dataset size. The dataset is 200 inputs.
+
+### ⚠ The TrustAI flagging rate is withdrawn
+
+This brief previously reported a **94.8% flagging rate (1,326/1,398 flagged medium or high;
+72 passed as low)** on TrustAI. **Nothing in this repository produces that number.**
+
+| | published claim | stored artifact |
+|---|---|---|
+| dataset size | 1,398 | 1,405 inputs |
+| scored rows | 1,398 | **321** |
+| flagged medium+high | 1,326 (**94.8%**) | 154 (**48.0%**) |
+| passed as low | 72 | **166** |
+
+`fixtures/trustai_sbh_results.jsonl` holds 321 rows, and `bench_run_local.log` records the
+same run as `Detection rate (medium+high): 0.483 (155/321)`. The two internal sources agree
+with each other and disagree with the published figure by roughly a factor of two.
+
+This is a different failure from the CyberEC and Deepset corrections above. Those were a
+runner defect plus a table that drifted from its data. Here the headline number has **no
+traceable derivation at all** — it may come from a run whose artifact was never saved. Until
+a run reproduces it, it should be treated as unsupported and must not be quoted.
+
+`run_bench_adversarial.py` carried the same discarded-escalation defect as the labeled
+runner, which on an all-adversarial corpus discards precisely the rows a flagging rate is
+meant to count. It is fixed, and a full re-run of all 1,405 inputs is in progress. This
+section will be replaced with the measured result.
 
 ### Escalation rate
 

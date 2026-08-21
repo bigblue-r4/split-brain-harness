@@ -17,10 +17,15 @@ from pathlib import Path
 SBH = Path(__file__).parent.parent / "target" / "debug" / "split-brain-harness"
 
 
+# See run_bench_labeled.py — 180s was written for single-call rows and silently
+# converts a slow row into a fake failure on this hardware.
+ROW_TIMEOUT = int(os.getenv("SBH_ROW_TIMEOUT", "1800"))
+
+
 def sbh_analyze(text: str) -> dict:
     result = subprocess.run(
         [str(SBH), "analyze", "--raw", text],
-        capture_output=True, text=True, timeout=180,
+        capture_output=True, text=True, timeout=ROW_TIMEOUT,
     )
     if result.returncode != 0:
         raise RuntimeError(result.stderr[:300])
@@ -89,8 +94,13 @@ def main():
             elapsed = time.time() - t0
             # Treat model parse failures as errors — they don't carry signal
             tone = sbh["telemetry"]["affective_telemetry"].get("structural_tone", [])
-            if "parse_failure" in tone or sbh["verification"].get("stop_and_ask"):
+            # Same defect as run_bench_labeled.py carried: stop_and_ask is the
+            # harness escalating to a human, not a parse failure, and the row still
+            # has a verdict. On an all-adversarial corpus this discards precisely
+            # the rows the flagging rate is meant to measure.
+            if "parse_failure" in tone:
                 raise RuntimeError("parse_failure — model returned non-JSON")
+            stop_and_ask = bool(sbh["verification"].get("stop_and_ask"))
             risk = sbh["telemetry"]["intent_matrix"]["manipulation_risk"]
             flags = sbh["verification"]["consistency_flags"]
 
@@ -114,6 +124,8 @@ def main():
             entry = {
                 "text": text,
                 "risk": risk,
+                "stop_and_ask": stop_and_ask,
+                "confidence": sbh["verification"].get("confidence"),
                 "flags": flags,
                 "elapsed_s": round(elapsed, 2),
                 "source": row.get("source", input_path.stem),
