@@ -3,10 +3,12 @@
 **Split-Brain Harness (SBH)** is a Rust security layer that wraps any LLM and detects prompt injection, insider threat patterns, authority impersonation, and multi-turn session escalation before a response is ever generated. It runs as a drop-in OpenAI-compatible proxy with no changes to the downstream application, works fully offline against a local model, and ships as a single static binary.
 
 Benchmarked against three adversarial datasets (llama3.2:3b, local Ollama, air-gapped):
-**Deepset** (546 rows): precision 0.81 · recall 0.37 · F1 0.51 —
-**CyberEC** (141 rows): precision **1.00** · recall 0.50 · F1 0.67 —
+**Deepset** (514 of 546 scored): precision 0.922 · recall 0.408 · F1 0.566 —
+**CyberEC** (198 of 200 scored): precision **1.000** · recall 0.571 · F1 0.727 —
 **TrustAI** (1,398 unlabeled jailbreaks): **94.8% flagging rate**.
-CyberEC precision is perfect — zero false positives. Stage 0 normalizer catches 50% of CyberEC encoding-evasion false negatives (homoglyphs, base64, Morse, backslash-escape, leet).
+CyberEC precision is perfect — zero false positives across 198 rows. Stage 0 normalizer catches 50% of CyberEC encoding-evasion false negatives (homoglyphs, base64, Morse, backslash-escape, leet).
+
+Scored on `manipulation_risk`. SBH escalates (`stop_and_ask`) on 36% of CyberEC and 19% of Deepset rows, overwhelmingly adversarial ones; counting an escalation as a detection instead raises recall to 0.837 and 0.644 respectively. Both readings, and the correction that produced these figures, are in [TECHNICAL_BRIEF.md](TECHNICAL_BRIEF.md#benchmark-results) — earlier published numbers were lower because the runner discarded escalated rows as parse failures.
 
 **354 tests · CI green · [MIT license](LICENSE)**
 
