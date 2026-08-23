@@ -123,7 +123,7 @@ making no model call of its own.
 |---|---|---|---|---|---|---|
 | Deepset Prompt Injections | 546 | 514 | **0.922** | 0.408 | 0.566 | 32 genuine parse failures excluded. FN gap: indirect/roleplay injections requiring multi-hop reasoning. |
 | CyberEC | 200 | 198 | **1.000** | 0.571 | 0.727 | Zero false positives. 2 genuine parse failures excluded. FN gap: encoding-evasion attacks (see Stage 0 normalizer below) |
-| TrustAI Jailbreaks | 1,405 | — | n/a | n/a | n/a | Unlabeled. ⚠ **Flagging rate withdrawn** — the published 94.8% is unsupported by any artifact here; see below. |
+| TrustAI Jailbreaks | 1,405 | 1,192 | n/a | n/a | n/a | Unlabeled — **48.9% flagged** medium/high; **80.8% flagged or escalated**. 213 parse failures (15.2%). Replaces a withdrawn 94.8% claim; see below. |
 
 **Correction (2026-08-21).** The figures above replace an earlier set that was wrong in
 both directions, and the reason is worth stating plainly because it changes how the
@@ -155,31 +155,48 @@ Two further discrepancies found while correcting this, neither introduced by the
 - The CyberEC row was labelled 141 rows, which was the count that survived exclusion, not
   the dataset size. The dataset is 200 inputs.
 
-### ⚠ The TrustAI flagging rate is withdrawn
+### TrustAI: the 94.8% flagging rate was wrong — measured is 48.9%
 
-This brief previously reported a **94.8% flagging rate (1,326/1,398 flagged medium or high;
-72 passed as low)** on TrustAI. **Nothing in this repository produces that number.**
+This brief previously reported a **94.8% flagging rate (1,326/1,398)** on TrustAI. It has
+been replaced with a measured figure, because nothing in this repository ever produced it.
 
-| | published claim | stored artifact |
-|---|---|---|
-| dataset size | 1,398 | 1,405 inputs |
-| scored rows | 1,398 | **321** |
-| flagged medium+high | 1,326 (**94.8%**) | 154 (**48.0%**) |
-| passed as low | 72 | **166** |
+A full re-run of all 1,405 inputs with the fixed adversarial runner:
 
-`fixtures/trustai_sbh_results.jsonl` holds 321 rows, and `bench_run_local.log` records the
-same run as `Detection rate (medium+high): 0.483 (155/321)`. The two internal sources agree
-with each other and disagree with the published figure by roughly a factor of two.
+| | published claim | 2026 artifact (321 rows) | **measured, full corpus** |
+|---|---|---|---|
+| scored rows | 1,398 | 321 | **1,192** |
+| flagged medium+high | **94.8%** | 48.0% | **48.9%** (583) |
+| escalated (`stop_and_ask`) | — | not recorded | **66.8%** (796) |
+| flagged **or** escalated | — | — | **80.8%** (963) |
+| parse failures | — | — | 213 (15.2%) |
 
-This is a different failure from the CyberEC and Deepset corrections above. Those were a
-runner defect plus a table that drifted from its data. Here the headline number has **no
-traceable derivation at all** — it may come from a run whose artifact was never saved. Until
-a run reproduces it, it should be treated as unsupported and must not be quoted.
+**Two independent runs on different runner code, over 321 and 1,192 rows, agree with each
+other at ~48% and disagree with the published claim by roughly a factor of two.**
+`bench_run_local.log` records the older run as `Detection rate (medium+high): 0.483
+(155/321)`. The 94.8% figure has no traceable derivation and should be treated as withdrawn
+wherever it appears, including in any external material quoting it.
 
-`run_bench_adversarial.py` carried the same discarded-escalation defect as the labeled
-runner, which on an all-adversarial corpus discards precisely the rows a flagging rate is
-meant to count. It is fixed, and a full re-run of all 1,405 inputs is in progress. This
-section will be replaced with the measured result.
+This failure differs from the CyberEC and Deepset corrections above. Those were a runner
+defect plus a table that had drifted from its data file, and in both cases the corrected
+numbers came out *better*. This one had no artifact behind it at all, and the correction is
+unfavourable.
+
+**What the corpus does support.** TrustAI is entirely adversarial, so there is no precision
+to compute — only what fraction gets through. On the strict reading SBH gives an explicit
+medium/high verdict on 48.9%. Counting escalations, **SBH flags or refuses to clear 80.8% of
+jailbreaks; fewer than one in five passes silently.** That is the defensible headline, and it
+must be stated as *flagged or escalated* — quoting 80.8% as a flagging rate would repeat the
+error being corrected here.
+
+**Robustness limit worth naming:** 15.2% of TrustAI inputs produced non-JSON and could not be
+scored at all, against 1.0% on CyberEC and 5.9% on Deepset. Jailbreak prompts are long and
+adversarial, and a 3B proposer fails to emit parseable telemetry on them far more often. A
+larger proposer is the obvious lever; `SBH_VERIFIER_MODEL` now makes that testable per-role.
+Six further rows returned malformed risk values (`unkn0wn`, five empty) and are counted as
+unflagged — the conservative choice.
+
+Artifact: `fixtures/trustai_sbh_results_fixedrunner.jsonl`.
+Reproduce: `python3 scripts/run_bench_adversarial.py fixtures/trustai_jailbreaks.jsonl --output <out>`
 
 ### Escalation rate
 
@@ -218,8 +235,8 @@ Reproduce: `python3 scripts/run_bench_labeled.py fixtures/<dataset>.jsonl --outp
 indirect injection cases (roleplay framing, document-embedded payloads) are the primary
 FN driver. Precision holds well across both labeled datasets — SBH almost never fires on
 benign content. CyberEC precision is perfect — every alert was a real injection, across
-198 scored rows. The TrustAI flagging rate predates the runner fix and has not been
-re-measured.
+198 scored rows. On TrustAI, 48.9% of jailbreaks draw an explicit medium/high verdict and
+80.8% are flagged or escalated.
 
 **Stage 0 normalizer (added post-baseline):** A deobfuscation pass now runs before
 Stage 1. Tested against the 26 CyberEC false negatives:
