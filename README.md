@@ -5,15 +5,16 @@
 Benchmarked against three adversarial datasets (llama3.2:3b, local Ollama, air-gapped):
 **Deepset** (514 of 546 scored): precision 0.922 · recall 0.408 · F1 0.566 —
 **CyberEC** (198 of 200 scored): precision **1.000** · recall 0.571 · F1 0.727 —
-**TrustAI** (1,405 unlabeled jailbreaks): flagging rate **under re-measurement** — see note below.
+**TrustAI** (1,192 of 1,405 scored): **48.9% flagged** medium/high · **80.8% flagged or escalated**.
 CyberEC precision is perfect — zero false positives across 198 rows. Stage 0 normalizer catches 50% of CyberEC encoding-evasion false negatives (homoglyphs, base64, Morse, backslash-escape, leet).
 
-> **⚠ TrustAI figure withdrawn pending re-measurement (2026-08-21).** This README previously
-> claimed a *94.8% flagging rate (1,326/1,398)*. **No artifact in this repository supports
-> that number.** The stored result set (`fixtures/trustai_sbh_results.jsonl`) contains 321
-> scored rows with 154 flagged medium-or-high — **48.0%** — and `bench_run_local.log` agrees
-> (`0.483 (155/321)`). The figure may come from a run whose output was never saved; until one
-> reproduces it, treat it as unsupported. A corrected run is in progress. See
+> **⚠ Correction (2026-08-23).** This README previously claimed a *94.8% TrustAI flagging
+> rate*. That figure has no derivation in this repository and is **withdrawn**. A full re-run
+> of all 1,405 inputs measures **48.9%** flagged medium/high — matching the 48.0% in the older
+> stored artifact and in `bench_run_local.log`. Counting escalations, **80.8% of jailbreaks are
+> flagged or refused**; that is the supported headline and must be quoted as *flagged or
+> escalated*, not as a flagging rate. 15.2% of TrustAI inputs could not be scored at all
+> (non-JSON from the 3B proposer). Details in
 > [TECHNICAL_BRIEF.md](TECHNICAL_BRIEF.md#benchmark-results).
 
 Scored on `manipulation_risk`. SBH escalates (`stop_and_ask`) on 36% of CyberEC and 19% of Deepset rows, overwhelmingly adversarial ones; counting an escalation as a detection instead raises recall to 0.837 and 0.644 respectively. Both readings, and the correction that produced these figures, are in [TECHNICAL_BRIEF.md](TECHNICAL_BRIEF.md#benchmark-results) — earlier published numbers were lower because the runner discarded escalated rows as parse failures.
