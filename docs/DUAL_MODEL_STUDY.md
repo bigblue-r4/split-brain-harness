@@ -1,6 +1,7 @@
 # Dual-model split-brain study
 
-**Status: method fixed, arms not yet run. No results in this document are final.**
+**Status: arms B and C complete, D in progress, E queued. No results in this document
+are final.**
 
 ## The question
 
@@ -35,11 +36,26 @@ encoding-evasion, half from Deepset natural-language injection), drawn by
 | B | llama3.2:3b | llama3.2:3b | `llm` | **Control.** Isolates the cost of a second LLM call. |
 | C | llama3.2:3b | qwen3.5 | `llm` | Cross-model. |
 | D | qwen3.5 | llama3.2:3b | `llm` | Cross-model, reversed. |
+| E | qwen3.5 | qwen3.5 | `llm` | **Second control.** Same-model control for D. |
 
 **C − B is the dual-model effect.** B − A is the cost of the second call. D exists
 because an effect that appears in only one direction is a finding, not noise.
 
-`SBH_REFINE_ITERS=1` is pinned across B/C/D, so every row is exactly one propose
+**Why E was added.** Arm D moves two variables at once against B — the proposer
+model changes *and* the hemispheres start to differ. So if D beats B, "qwen3.5 is
+simply the better proposer" accounts for the entire gain without model diversity
+contributing anything, and there is no arm on disk that can tell the two apart.
+Arm E runs qwen3.5 on both hemispheres, which makes **D − E the dual-model effect
+at qwen3.5's proposer** — the mirror of C − B at llama3.2's — and **E − B the
+proposer-model effect** with diversity held out of it.
+
+E was added on 2026-08-24, after B and C had finished and D had shown a
+significant gain over B on both escalation metrics. It is a control for a
+confound the data exposed, not a new hypothesis, and it does not replace the
+pre-registered comparison: **C − B remains the primary test.** D − E is
+secondary and should be reported as such.
+
+`SBH_REFINE_ITERS=1` is pinned across B/C/D/E, so every row is exactly one propose
 call and one verify call. Refinement otherwise fires a variable number of extra
 calls depending on which flags trip — which would make arms differ in cost and
 behaviour for reasons that have nothing to do with which model verified.
@@ -104,8 +120,8 @@ Full-prompt per-row cost is measured by `scripts/probe_arms.py`; see Results.
 ollama serve                                   # models under /usr/share/ollama
 cargo build --release
 python3 scripts/make_sample.py --per-class 50  # regenerates the committed sample
-./scripts/run_arms.sh                          # arms B, C, D  (--resume to continue)
-python3 scripts/compare_arms.py fixtures/dualmodel_arm{B,C,D}.jsonl
+./scripts/run_arms.sh                          # arms B, C, D, E  (--resume to continue)
+python3 scripts/compare_arms.py fixtures/dualmodel_arm{B,C,D,E}.jsonl
 ```
 
 ## Results
