@@ -5,3 +5,4 @@ cyberec_refix.log
 deepset_refix.log
 trustai_refix.log
 ollama_serve.log
+__pycache__/
