@@ -162,8 +162,17 @@ pub async fn verify(
 
     // Reconcile pass: when the injection fingerprint fires or flag density is high,
     // run a third adjudicator LLM call presenting both sides and asking for a verdict.
-    // Inspired by ReConcile (ACL 2024): diverse models reach consensus through
-    // discussion rather than a single asymmetric verifier judgment.
+    //
+    // The structure comes from ReConcile (ACL 2024). Its premise — that *diverse*
+    // models reach consensus better than a single asymmetric verifier judgment — has
+    // since been measured here and did not reproduce: over 800 rows, running the
+    // hemispheres on different models produced no measurable benefit, and the
+    // same-model arm won the one metric that separated them. See
+    // docs/DUAL_MODEL_STUDY.md.
+    //
+    // That study ran at VerifyMode::Llm — propose + verify, no adjudicator — so it
+    // does not measure this three-call path directly. Read the citation as the origin
+    // of the structure, not as evidence that the structure pays for itself.
     if matches!(mode, VerifyMode::Reconcile)
         && (disagreement.injection_fingerprint || disagreement.flag_density >= 0.5)
     {
