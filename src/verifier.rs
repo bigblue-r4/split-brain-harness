@@ -166,9 +166,10 @@ pub async fn verify(
     // The structure comes from ReConcile (ACL 2024). Its premise — that *diverse*
     // models reach consensus better than a single asymmetric verifier judgment — has
     // since been measured here and did not reproduce: over 800 rows, running the
-    // hemispheres on different models produced no measurable benefit, and the
-    // same-model arm won the one metric that separated them. See
-    // docs/DUAL_MODEL_STUDY.md.
+    // hemispheres on different models produced no measurable benefit. The
+    // same-model arm was nominally ahead on one metric, but that result does not
+    // survive correction for the eighteen tests the study ran, so the finding is
+    // the null and not a reversal. See docs/DUAL_MODEL_STUDY.md.
     //
     // That study ran at VerifyMode::Llm — propose + verify, no adjudicator — so it
     // does not measure this three-call path directly. Read the citation as the origin

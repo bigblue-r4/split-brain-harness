@@ -39,7 +39,13 @@ for arm in "${ARMS[@]}"; do
     C) PROPOSER=llama3.2:3b; VERIFIER=qwen3.5     ;;
     D) PROPOSER=qwen3.5;     VERIFIER=llama3.2:3b ;;
     E) PROPOSER=qwen3.5;     VERIFIER=qwen3.5     ;;
-    *) echo "unknown arm: $arm (want B, C, D or E)"; exit 1 ;;
+    # B2 is arm B re-run unchanged: the test-retest replicate. Temperature is 0.1,
+    # not 0, so the same configuration does not give the same answer twice — and
+    # until B vs B2 is measured, every difference in this study is being read
+    # against an unknown noise floor. Not in the default arm list: it is a
+    # calibration run, not one of the four design arms.
+    B2) PROPOSER=llama3.2:3b; VERIFIER=llama3.2:3b ;;
+    *) echo "unknown arm: $arm (want B, C, D, E or B2)"; exit 1 ;;
   esac
 
   export SBH_MODEL="$PROPOSER"
