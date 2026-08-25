@@ -29,17 +29,25 @@ BENIGN = ("benign", "safe", "0", 0)
 def load(path: Path) -> dict[str, dict]:
     """Rows keyed by input text. Errored rows are dropped — a row that never
     produced a verdict is not evidence either way — but the count is reported so
-    a lopsided error rate can't hide."""
-    rows, errors = {}, 0
+    a lopsided error rate can't hide.
+
+    A resumed run retries errored rows and *appends* the retry, so the original
+    ERROR line stays in the file next to the verdict that replaced it. Counting
+    both would charge an arm a parse failure for a row it went on to answer, and
+    would do so in proportion to how often that arm was interrupted — which is a
+    property of the box, not of the model. So an ERROR is only counted for a text
+    that has no successful row anywhere in the file."""
+    rows, error_texts = {}, set()
     for line in open(path):
         line = line.strip()
         if not line:
             continue
         r = json.loads(line)
         if r.get("outcome") == "ERROR":
-            errors += 1
+            error_texts.add(r["text"])
             continue
         rows[r["text"]] = r
+    errors = len(error_texts - rows.keys())
     return rows, errors
 
 
