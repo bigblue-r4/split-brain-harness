@@ -22,10 +22,13 @@ jobs:
       - run: cargo test
       - run: cargo clippy -- -D warnings
 
-  # NOTE: crates.io publishing is disabled while the crate is a Cargo workspace.
-  # The root crate has path dependencies on the unpublished `sbh-*` members, which
-  # `cargo publish` rejects. Publishing the workspace (versioning + publishing all
-  # member crates first) is tracked separately; releases are GitHub-only until then.
+  # NOTE: crates.io publishing is deliberately manual, not blocked.
+  # The workspace is publishable as of this commit: every `sbh-*` path dependency
+  # carries a version, so `cargo publish --workspace` packages all seven crates in
+  # dependency order. It is not wired into this workflow because a crates.io version
+  # can never be deleted (only yanked) and the six `sbh-*` names are claimed on first
+  # upload — that is a decision to make at a keyboard, not on a tag push. Publish with:
+  #     cargo publish --workspace
 
   create-release:
     name: Create GitHub Release

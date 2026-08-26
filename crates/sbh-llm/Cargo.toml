@@ -4,6 +4,7 @@ version     = "0.1.0"
 edition     = "2021"
 description = "LLM backend abstraction for the Split-Brain Harness: the InferenceEngine trait and its Ollama / OpenAI-compatible / Anthropic / embedded implementations."
 license     = "MIT"
+repository  = "https://github.com/bigblue-r4/split-brain-harness"
 
 [lib]
 name = "sbh_llm"
@@ -13,4 +14,4 @@ path = "src/lib.rs"
 reqwest     = { version = "0.12", features = ["json"] }
 serde_json  = "1.0"
 async-trait = "0.1"
-sbh-core    = { path = "../sbh-core" }
+sbh-core    = { path = "../sbh-core", version = "0.1.0" }

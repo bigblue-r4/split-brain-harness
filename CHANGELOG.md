@@ -6,6 +6,18 @@ All notable changes to split-brain-harness are documented here.
 
 ## [Unreleased]
 
+### Packaging
+
+**The workspace is publishable to crates.io**
+- Every `sbh-*` path dependency now carries a `version`, which is what `cargo publish`
+  requires; `cargo publish --workspace` packages all seven crates in dependency order.
+  crates.io has been stuck at the pre-workspace v1.2.0 since the v2 clean-core split.
+- The six member crates (`sbh-core`, `sbh-normalize`, `sbh-llm`, `sbh-safety`,
+  `sbh-store`, `sbh-forge`) enter at `0.1.0` and carry `repository` metadata.
+- The root package now `exclude`s the benchmark corpora and run logs: 713 KiB packaged
+  (185 KiB compressed), down from ~10 MB. `fixtures/eval.json` stays in — `tests/eval.rs`
+  reads it. The excluded data remains in git, where the study evidence belongs.
+
 ### Added
 
 **Per-role models — the two hemispheres can run on different models**

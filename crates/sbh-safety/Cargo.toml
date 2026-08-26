@@ -4,6 +4,7 @@ version     = "0.1.0"
 edition     = "2021"
 description = "Shared safety mid-layer for the Split-Brain Harness: soul loading (identity), path/secret security, and capability policy. Used by both the core pipeline and the forge."
 license     = "MIT"
+repository  = "https://github.com/bigblue-r4/split-brain-harness"
 
 [lib]
 name = "sbh_safety"
@@ -11,7 +12,7 @@ path = "src/lib.rs"
 
 [dependencies]
 anyhow   = "1.0"
-sbh-core = { path = "../sbh-core" }
+sbh-core = { path = "../sbh-core", version = "0.1.0" }
 
 [dev-dependencies]
 tempfile = "3"
