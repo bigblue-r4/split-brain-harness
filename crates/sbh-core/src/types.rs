@@ -37,13 +37,15 @@ pub enum VerifyMode {
     /// DiscoUQ structured disagreement scoring. Note what is and is not claimed:
     /// ReConcile's result rests on *diverse* models, and that premise has now been
     /// measured in this repo — it did not reproduce. Over 800 rows, per-role model
-    /// diversity produced no measurable benefit, and on the one metric that
-    /// separated the arms the same-model pairing won.
+    /// diversity produced no measurable benefit. The same-model pairing was
+    /// nominally ahead on one metric, but that does not survive correction for the
+    /// eighteen tests run, so what stands is the null, not a reversal.
     ///
-    /// Two limits on that finding. It was measured at `VerifyMode::Llm` (propose +
-    /// verify, no adjudicator), so this three-call path is untested. And it paired
-    /// two 3B/7B-class local models, which may simply be too similar for consensus
-    /// between them to carry information.
+    /// Three limits on that finding. It was measured at `VerifyMode::Llm` (propose +
+    /// verify, no adjudicator), so this three-call path is untested. It paired two
+    /// 3B/7B-class local models, which may simply be too similar for consensus
+    /// between them to carry information. And no arm was run twice, so the
+    /// measurement noise floor is unquantified.
     ///
     /// Either way, with `verifier_model_name` / `adjudicator_model_name` unset all
     /// three calls go to one model, which is a self-consistency check and not a
