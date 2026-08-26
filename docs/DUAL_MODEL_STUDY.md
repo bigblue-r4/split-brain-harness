@@ -150,10 +150,10 @@ everything above that point is still standing.
    shows no benefit. This is a null result, and it is stated as one.
 4. **The apparent D − E advantage for the same-model arm does not survive
    multiplicity correction** and should not be reported as a finding. See below.
-5. **Measurement noise is unquantified.** No arm was run twice; temperature is 0.1,
-   not 0. A replicate (arm B2) is pending. Until it lands, every difference here is
-   being read against an unknown noise floor — which is a limit on all four points
-   above, not a footnote to them.
+5. **Measurement noise is now quantified, and it is low.** Arm B2 re-ran arm B
+   unchanged: differences of ~0.011 with symmetric discordance. Points 1 and 2 sit
+   an order of magnitude above that floor; point 4's effect does not look like noise
+   either, it is simply under-powered. See *The noise floor* below.
 
 ### Per-arm
 
@@ -290,6 +290,54 @@ disagree so sharply about arm E: the reading that credits an escalation as a cat
 label sees +0.162. Reporting one convention alone would have hidden the actual change in
 behaviour.
 
+### The noise floor (arm B2)
+
+Temperature is 0.1, not 0, so the same configuration does not give the same answer
+twice. Until that was measured, every difference in this study was being read against
+an unknown. Arm B2 is arm B re-run unchanged — same models, same sample, same binary,
+same settings — so every difference between them is noise by construction.
+
+| | Arm B | Arm B2 (replicate) |
+|---|---|---|
+| Parse failures | 15/200 (0.075) | **14/200 (0.070)** |
+| Escalated | 67 (36%) | **69 (37%)** |
+| Median s/row | 160.7 | **165.3** |
+| risk-only accuracy | 0.773 | 0.780 |
+| escalation-as-catch | 0.838 | 0.844 |
+| escalation-as-nonanswer | 0.616 | 0.627 |
+
+Paired, on the 185 rows both arms answered:
+
+| Scoring | Difference | 95% CI | Discordant | McNemar |
+|---|---|---|---|---|
+| risk-only | +0.011 | [−0.022, +0.043] | 4/6 | p=0.75 |
+| escalation-as-catch | +0.011 | [−0.032, +0.054] | 7/9 | p=0.80 |
+| escalation-as-nonanswer | +0.011 | [−0.022, +0.043] | 4/6 | p=0.75 |
+
+**Two things matter here, and only one of them is the magnitude.**
+
+The size of the noise is small: run-to-run accuracy moves ~0.011, with a 95% band of
+roughly ±0.03 to ±0.05. The proposer effects (+0.141, +0.162) sit an order of magnitude
+above it. The parse-failure result reproduced almost exactly — 15 then 14 — which is the
+strongest confirmation available that it is a property of the model and not of the run.
+
+The *shape* matters more. Noise produced discordance volumes of 10, 16 and 10 pairs —
+comparable to the 16 discordant pairs behind D − E's escalation-as-nonanswer result. So
+volume alone cannot separate signal from noise here. What separates them is asymmetry:
+noise split its discordant pairs **4/6, 7/9, 4/6** — close to even, which is what
+chance looks like. D − E split **3/13**, 81% in one direction. Chance does not do that,
+and McNemar tests precisely that asymmetry.
+
+So D − E is most likely a real effect that is simply under-powered, exactly as the
+sample-size estimate above implies — **not** an artifact of run-to-run variation. It
+still does not survive multiplicity correction, and it is still not claimed. Those two
+statements are compatible, and keeping them apart is the point of reporting both.
+
+One curiosity, recorded rather than explained: B2 came out +0.011 ahead on all three
+scorings, i.e. exactly two more rows correct under each. With 10 to 16 discordant pairs
+per scoring that is coincidence rather than a systematic second-run advantage, but it is
+the kind of coincidence worth writing down in case a third replicate ever contradicts it.
+
 ### Cost
 
 The honest answer is expensive. Arm E is **2.3x slower per row than the control** —
@@ -319,6 +367,11 @@ enough to make the opposite claim. Two 3B/7B-class local models are also a weak
 test of diversity: they may simply be too similar, or too weak, for consensus
 between them to mean anything. A pairing with genuinely different training
 lineages could behave differently, and this design would not have detected it.
+
+The measurement-noise limit is now discharged rather than outstanding: arm B2
+quantified it, and it is small enough that the two headline findings clear it by an
+order of magnitude. What remains unmeasured is whether a *third* run would agree with
+the first two — one replicate establishes a floor, not a distribution.
 
 The proposer finding carries its own limit: it rests on one scoring convention
 (escalation-as-nonanswer) and the parse rate. The other two conventions move in
