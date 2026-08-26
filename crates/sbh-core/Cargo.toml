@@ -4,6 +4,7 @@ version     = "0.1.0"
 edition     = "2021"
 description = "Core typed data model for the Split-Brain Harness: telemetry, verification, config, capability, and JSON extraction."
 license     = "MIT"
+repository  = "https://github.com/bigblue-r4/split-brain-harness"
 
 [lib]
 name = "sbh_core"

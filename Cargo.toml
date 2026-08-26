@@ -9,6 +9,16 @@ keywords    = ["llm", "security", "ai-safety", "prompt-injection", "telemetry"]
 categories  = ["asynchronous", "network-programming", "web-programming"]
 readme      = "README.md"
 
+# Kept out of the published crate: benchmark corpora and run artifacts are the
+# repository's evidence, not payload every `cargo add` should download. They stay
+# in git. `fixtures/eval.json` is NOT excluded — tests/eval.rs reads it.
+exclude = [
+    "fixtures/*.jsonl",
+    "*.log",
+    "SLIDES.pdf",
+    "SLIDES.html",
+]
+
 # v2 clean-core migration: incrementally carving leaf crates out of this package.
 # The root package stays the working crate; extracted crates live under crates/*
 # and are re-exported from src/lib.rs so existing `crate::<mod>` paths keep working.
@@ -31,12 +41,12 @@ async-trait  = "0.1"
 anyhow       = "1.0"
 toml         = { version = "0.8", default-features = false, features = ["parse"] }
 base64       = "0.22"
-sbh-normalize = { path = "crates/sbh-normalize" }
-sbh-core      = { path = "crates/sbh-core" }
-sbh-store     = { path = "crates/sbh-store" }
-sbh-llm       = { path = "crates/sbh-llm" }
-sbh-safety    = { path = "crates/sbh-safety" }
-sbh-forge     = { path = "crates/sbh-forge" }
+sbh-normalize = { path = "crates/sbh-normalize", version = "0.1.0" }
+sbh-core      = { path = "crates/sbh-core", version = "0.1.0" }
+sbh-store     = { path = "crates/sbh-store", version = "0.1.0" }
+sbh-llm       = { path = "crates/sbh-llm", version = "0.1.0" }
+sbh-safety    = { path = "crates/sbh-safety", version = "0.1.0" }
+sbh-forge     = { path = "crates/sbh-forge", version = "0.1.0" }
 axum         = { version = "0.7", features = ["json"], optional = true }
 axum-server  = { version = "0.7", features = ["tls-rustls"], optional = true }
 ratatui      = { version = "0.29", optional = true }

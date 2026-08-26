@@ -4,6 +4,7 @@ version     = "0.1.0"
 edition     = "2021"
 description = "Stage 0 deobfuscation normalizer for the Split-Brain Harness (7-pass: bidi, fullwidth, backslash, base64, morse, homoglyph, leet)."
 license     = "MIT"
+repository  = "https://github.com/bigblue-r4/split-brain-harness"
 
 [lib]
 name = "sbh_normalize"
