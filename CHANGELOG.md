@@ -4,6 +4,34 @@ All notable changes to split-brain-harness are documented here.
 
 ---
 
+## [Unreleased]
+
+### Measured
+
+**The three-call Reconcile path is inert — measured without a single new LLM call**
+- v1.4.0 shipped the dual-model study with an open caveat: every arm ran at
+  `VerifyMode::Llm`, so the three-call `VerifyMode::Reconcile` path was never measured.
+  That caveat is now discharged, on two independent counts.
+- **Reachability.** The adjudicator gate
+  (`injection_fingerprint || flag_density >= 0.5`) is recoverable from artifacts
+  already on disk, because `CheckOutcome::fired()` is defined as `detail.is_some()` and
+  `consistency_flags` records every `detail` — the recorded flag set *is* the fired set.
+  Over all 1,002 study rows the gate opens **0 times**. The urgency-with-low-risk half
+  of the fingerprint never fires at all: these models report high risk whenever they
+  report urgency (the corpus holds 32 rows of exactly the opposite pattern).
+- **Effect.** Even when the gate does open, the verdict changes nothing.
+  `confidence` is copied out of `disagreement` before the reconcile block, and
+  `stop_and_ask` / `passed` derive from that copy; `reconcile_verdict` has no reader in
+  production code. New test `reconcile_verdict_cannot_change_the_decision` runs
+  identical input through both modes with a maximally dissenting adjudicator and
+  asserts every scored field is equal. **It fails if the verdict is ever wired in** —
+  which is the signal to re-measure, not to relax the assertion.
+- `scripts/reconcile_gate.py` reproduces the gate numbers from any bench artifact.
+- Nothing about the pipeline's behaviour changed here. This release records what the
+  code already did.
+
+---
+
 ## [1.4.0] — 2026-08-26
 
 First release to reach crates.io since 1.2.0, and the first that ships the
