@@ -394,38 +394,54 @@ so on this corpus `VerifyMode::Reconcile` issues byte-for-byte the same calls as
 That is a finding about **this corpus and these models**, and it would not transfer
 unexamined to a proposer whose telemetry does report urgency-with-low-risk.
 
-### 2. Even when it fires, the verdict cannot change the outcome
+### 2. The verdict was not read — now it is (fixed)
 
-This one is not corpus-dependent — it is structural, and it holds for every input.
+**As measured**, this was not corpus-dependent: it held for every input.
+`confidence` was copied out of `disagreement` *before* the reconcile block, and
+`stop_and_ask` and `passed` derived from that copy, while `reconcile_verdict` had no
+reader anywhere in production code. The adjudicator's opinion was recorded and then
+ignored.
 
-`confidence` is copied out of `disagreement` *before* the reconcile block runs.
-`stop_and_ask` and `passed` are then derived from that copy plus the flag vectors.
-`reconcile_verdict` is written at `verifier.rs:183` and **has no reader anywhere in
-production code** — the only other references are tests asserting it is set. So the
-adjudicator's opinion is recorded and then ignored.
+**That is now wired.** `verifier.rs` feeds the verdict into `stop_and_ask`, under one
+deliberate restriction:
 
-`verifier::tests::reconcile_verdict_cannot_change_the_decision` pins this: identical
-input through both modes, with an adjudicator that returns the *opposite* verdict at
-0.99 confidence, and every scored field — `passed`, `stop_and_ask`, `confidence`,
-all four flag vectors, `fired_checks`, and the whole disagreement score — comes out
-equal. The one difference in the entire report is the recorded verdict string.
+> **The ratchet — the adjudicator may raise the alarm, never lower it.**
+> `injection` forces `stop_and_ask`. `benign`, `ambiguous`, an unrecognised string, a
+> parse failure, and an unreachable adjudicator all change nothing.
 
-**If that test ever fails, the verdict has been wired into the decision, and this
-comparison needs re-running for real.** That is the signal to re-measure, not to relax
-the assertion.
+The asymmetry is the point, and it is a security argument rather than a statistical
+one. This gate only opens on rows already judged suspicious — the fingerprint matched,
+or half the checks fired. The payload that raised those flags is sitting in the
+adjudicator's own prompt. A `benign` verdict is therefore the suspect input arguing its
+own case to a third model, and honouring it would hand any payload that can talk its
+way past one call a route to clear the flags raised against it. Escalation carries no
+symmetric risk: a wrong `injection` costs one unnecessary `stop_and_ask` on a row that
+was already flagged.
+
+`passed` needed no wiring. The gate implies at least two fired checks (the fingerprint
+needs a Tone and an Urgency check; density needs four of eight), and
+`passed = consistency_flags.is_empty() && unsupported_claims.is_empty()` — so `passed`
+is already `false` whenever the adjudicator runs. `stop_and_ask` is the only decision
+the adjudicator can move.
+
+Seven tests pin the semantics, including a baseline test asserting the scenario does
+**not** already stop — without it the escalation test would pass whether or not the
+wiring worked — and `llm_mode_never_escalates`, which pins that `VerifyMode::Llm` and
+deterministic mode never consult an adjudicator. **Every published benchmark in this
+repo ran at one of those two modes, so none of them are affected by this change.**
 
 ### What this means
 
-A benchmark of Reconcile against Llm on this corpus would have returned a difference
-of exactly zero, and burned roughly a day of CPU to do it. Had the gate opened, it
-would have returned sampling noise, because the extra call cannot move a scored field.
+Finding 1 still stands and still blocks measurement. Wiring the verdict in makes the
+third call *capable* of changing a decision; it does not make that call *happen*. On
+this corpus the gate opens 0 times out of 1,002, so a Reconcile-vs-Llm benchmark run
+today would still return exactly zero — now for one reason instead of two.
 
-So the honest status of the three-call path is: **structurally present, currently
-inert.** The ReConcile citation describes where the shape came from; it does not
-describe behaviour this pipeline exhibits. The measurable question — *does adjudication
-pay for itself?* — cannot be asked of the code as written. Asking it requires first
-wiring `reconcile_verdict` into the decision and giving the gate a trigger these models
-can actually produce. Both are changes, not measurements, and neither is made here.
+The remaining question — *does adjudication pay for itself?* — needs a gate these
+models can actually trigger. That is a change to detection behaviour, with its own
+false-positive cost, and it is deliberately **not** bundled with the wiring so that the
+two effects stay separately attributable. Until then the honest status of the
+three-call path is: **wired, and still unreachable.**
 
 ## Limits
 
