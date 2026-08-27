@@ -4,7 +4,10 @@ All notable changes to split-brain-harness are documented here.
 
 ---
 
-## [Unreleased]
+## [1.4.0] — 2026-08-26
+
+First release to reach crates.io since 1.2.0, and the first that ships the
+dual-model study's findings.
 
 ### Packaging
 
@@ -41,6 +44,15 @@ All notable changes to split-brain-harness are documented here.
 Prior benchmark tables in this repo are single-model runs at
 `verify_mode = deterministic` — the verifier hemisphere made no LLM call at all.
 They are not a control for a dual-model comparison; see `docs/DUAL_MODEL_STUDY.md`.
+
+### Yanked
+
+**crates.io `1.3.0` is yanked.** It was uploaded from this commit rather than from
+the `v1.3.0` tag, so its contents were 32 commits ahead of the GitHub release of the
+same name — it contained per-role models and the corrected benchmark tables, which
+the tagged v1.3.0 source does not. Rather than leave two different trees sharing a
+version number, that upload is yanked and this release carries the code instead.
+Yanking does not break existing lockfiles. The GitHub `v1.3.0` tag is unchanged.
 
 ---
 
