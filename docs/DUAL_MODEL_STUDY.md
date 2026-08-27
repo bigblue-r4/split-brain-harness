@@ -351,6 +351,82 @@ were on the same box with the same pinned settings; the likely cause is backgrou
 differing between runs, since wall-clock latency here is not a controlled variable. It
 should not be read as "adding qwen3.5 as verifier makes the pipeline faster."
 
+## The three-call Reconcile path
+
+The arms above all ran at `VerifyMode::Llm` — propose + verify, two calls, no
+adjudicator — so this study was published with an explicit caveat that it did not
+measure `VerifyMode::Reconcile`, the three-call path that carries the ReConcile
+citation. **That caveat is now discharged, and it did not need a single new LLM call
+to discharge it.** Two independent findings, either one sufficient on its own.
+
+### 1. The adjudicator is never reached on this corpus
+
+The third call is gated:
+
+```rust
+if matches!(mode, VerifyMode::Reconcile)
+    && (disagreement.injection_fingerprint || disagreement.flag_density >= 0.5)
+```
+
+Both sides of that OR are recoverable from artifacts already on disk. `flags` in a
+bench row records exactly the fired consistency checks — `CheckOutcome::fired()` is
+*defined* as `detail.is_some()`, and `consistency_flags` collects every `detail` — so
+the recorded flag set is the fired set, exactly rather than approximately.
+`flag_density >= 0.5` is then `len(flags) >= 4` of `TOTAL_CHECKS = 8`, and
+`injection_fingerprint` is a Tone check and an Urgency check both firing (each already
+requires `manipulation_risk == Low`, so that conjunct is implied).
+
+Over all 1,002 rows of arms B, B2, C, D and E (`scripts/reconcile_gate.py`):
+
+| | tone | urgency | fingerprint | density | **gate opens** |
+|---|---|---|---|---|---|
+| 1,002 rows | 12 | **0** | **0** | **0** | **0 (0.00%)** |
+
+The urgency check — `urgency_vector >= 0.7` together with `manipulation_risk = low` —
+**never fired once**. Not rarely: never. And the reason is structural rather than a
+quirk of sampling. The corpus contains 32 rows of the *opposite* pattern
+(`manipulation_risk=high` with low urgency and no coercive tone), which says these
+models do not report high urgency alongside low risk. When they see urgency they call
+the risk high. The fingerprint asks for a combination their telemetry does not produce,
+so on this corpus `VerifyMode::Reconcile` issues byte-for-byte the same calls as
+`VerifyMode::Llm`.
+
+That is a finding about **this corpus and these models**, and it would not transfer
+unexamined to a proposer whose telemetry does report urgency-with-low-risk.
+
+### 2. Even when it fires, the verdict cannot change the outcome
+
+This one is not corpus-dependent — it is structural, and it holds for every input.
+
+`confidence` is copied out of `disagreement` *before* the reconcile block runs.
+`stop_and_ask` and `passed` are then derived from that copy plus the flag vectors.
+`reconcile_verdict` is written at `verifier.rs:183` and **has no reader anywhere in
+production code** — the only other references are tests asserting it is set. So the
+adjudicator's opinion is recorded and then ignored.
+
+`verifier::tests::reconcile_verdict_cannot_change_the_decision` pins this: identical
+input through both modes, with an adjudicator that returns the *opposite* verdict at
+0.99 confidence, and every scored field — `passed`, `stop_and_ask`, `confidence`,
+all four flag vectors, `fired_checks`, and the whole disagreement score — comes out
+equal. The one difference in the entire report is the recorded verdict string.
+
+**If that test ever fails, the verdict has been wired into the decision, and this
+comparison needs re-running for real.** That is the signal to re-measure, not to relax
+the assertion.
+
+### What this means
+
+A benchmark of Reconcile against Llm on this corpus would have returned a difference
+of exactly zero, and burned roughly a day of CPU to do it. Had the gate opened, it
+would have returned sampling noise, because the extra call cannot move a scored field.
+
+So the honest status of the three-call path is: **structurally present, currently
+inert.** The ReConcile citation describes where the shape came from; it does not
+describe behaviour this pipeline exhibits. The measurable question — *does adjudication
+pay for itself?* — cannot be asked of the code as written. Asking it requires first
+wiring `reconcile_verdict` into the decision and giving the gate a trigger these models
+can actually produce. Both are changes, not measurements, and neither is made here.
+
 ## Limits
 
 Whatever the outcome, this study establishes something narrow: two specific
