@@ -359,9 +359,9 @@ measure `VerifyMode::Reconcile`, the three-call path that carries the ReConcile
 citation. **That caveat is now discharged, and it did not need a single new LLM call
 to discharge it.** Two independent findings, either one sufficient on its own.
 
-### 1. The adjudicator is never reached on this corpus
+### 1. The adjudicator was never reached on this corpus — now it can be (fixed)
 
-The third call is gated:
+As measured, the third call was gated:
 
 ```rust
 if matches!(mode, VerifyMode::Reconcile)
@@ -393,6 +393,12 @@ so on this corpus `VerifyMode::Reconcile` issues byte-for-byte the same calls as
 
 That is a finding about **this corpus and these models**, and it would not transfer
 unexamined to a proposer whose telemetry does report urgency-with-low-risk.
+
+**The trigger has since been replaced** — see finding 3 below. The gate now opens on
+7.8% of these same rows. The paragraphs above describe the trigger as it was when
+measured, and are kept because the failure mode they describe is the instructive part:
+a gate can be perfectly reasonable on paper and still ask for a conjunction the
+upstream model never emits.
 
 ### 2. The verdict was not read — now it is (fixed)
 
@@ -430,18 +436,69 @@ wiring worked — and `llm_mode_never_escalates`, which pins that `VerifyMode::L
 deterministic mode never consult an adjudicator. **Every published benchmark in this
 repo ran at one of those two modes, so none of them are affected by this change.**
 
+### 3. The gate had no reachable trigger — now it does (fixed)
+
+The old trigger was `injection_fingerprint || flag_density >= 0.5`, and both disjuncts
+asked for things these models do not produce. The fingerprint wanted adversarial tone
+**and** high urgency **and** an asserted low risk; the density wanted four of eight
+checks when **the observed per-row maximum is two**.
+
+The trigger is now **"a check about intent fired"** (`Dimension::is_intent_signal`).
+The question an adjudicator answers is *"was the proposer deceived about what this
+input wants?"*, so the gate opens exactly when some check has said something about
+intent. Coherence and RiskValue are excluded — they report that the input is garbled
+or the risk value unparseable, and a third opinion on the same garbled text has
+nothing to work with.
+
+That split is semantic, not fitted. But the labels corroborate it sharply. Scoring
+candidate triggers on the 957 labelled rows (`scripts/gate_candidates.py`), counting a
+**WIN** as firing on a non-stopping injection and a **COST** as firing on a
+correctly-passed benign row:
+
+| trigger | fires | WIN | COST | share of the 243 misses |
+|---|---|---|---|---|
+| old (fingerprint or density) | 0 | 0 | 0 | 0.0% |
+| intent signals only | 69 | 32 | **0** | 13.2% |
+| **intent + value-alignment (shipped)** | **78** | **34** | **0** | **14.0%** |
+| any fired check at all | 120 | 39 | **3** | 16.0% |
+
+The last row is why Coherence is excluded: **the only benign rows in the entire corpus
+that fire any check fire Coherence, and nothing else.** Excluding the two quality
+dimensions is exactly what takes the cost to zero. The extra 5 misses that "any check"
+would reach are bought with 3 false escalations on correctly-handled benign input.
+
+Both old disjuncts are retained in the code even though
+`old_gate_conditions_are_subsumed_by_the_intent_signal` proves them redundant over all
+256 dimension subsets — they cost nothing and act as a floor if `is_intent_signal` is
+ever edited.
+
+### A measurement error worth recording
+
+The first version of `scripts/reconcile_gate.py` counted the `"obfuscation detected"`
+string toward `flag_density`. That string is inserted into `consistency_flags` by
+`stage_obfuscation` **after `verify()` has returned**, so the gate never sees it.
+
+The conclusion was unaffected — 0 either way, and correct counting puts the old gate
+*further* from firing, since the real per-row maximum is 2 fired checks rather than 3.
+But the script was measuring the wrong quantity, and a different corpus could have made
+that matter. `run_bench_labeled.py` now records `fired_checks` (check IDs) so gate
+analysis need never match on flag text again.
+
 ### What this means
 
-Finding 1 still stands and still blocks measurement. Wiring the verdict in makes the
-third call *capable* of changing a decision; it does not make that call *happen*. On
-this corpus the gate opens 0 times out of 1,002, so a Reconcile-vs-Llm benchmark run
-today would still return exactly zero — now for one reason instead of two.
+All three findings are now addressed: the verdict is wired, the gate has a reachable
+trigger, and the trigger is scored against labels rather than tuned until it fires.
 
-The remaining question — *does adjudication pay for itself?* — needs a gate these
-models can actually trigger. That is a change to detection behaviour, with its own
-false-positive cost, and it is deliberately **not** bundled with the wiring so that the
-two effects stay separately attributable. Until then the honest status of the
-three-call path is: **wired, and still unreachable.**
+**A Reconcile-vs-Llm benchmark is now worth running** — the gate opens on 7.8% of rows
+and the adjudicator can move those decisions. What it will measure is bounded, and the
+bound should be stated before the run rather than discovered after it: at most **34 of
+243 missed injections (14.0%)** are reachable, because only 39 of those 243 fire any
+check at all. The adjudicator has to actually return `injection` on them to convert a
+single one, so 14.0% is a ceiling, not an expectation.
+
+The deeper limit is unchanged and is not a gate problem: **the proposer's telemetry
+does not flag 84% of the injections it misses.** No amount of adjudication reaches a
+row that raised no signal to adjudicate.
 
 ## Limits
 

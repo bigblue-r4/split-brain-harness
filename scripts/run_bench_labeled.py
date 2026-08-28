@@ -171,6 +171,12 @@ def main():
                 "risk": risk,
                 "outcome": outcome,
                 "flags": sbh["verification"]["consistency_flags"],
+                # Check IDs, not flag text. `flags` is not a reliable view of what
+                # the verifier saw: stage_obfuscation inserts an "obfuscation
+                # detected" string into consistency_flags after verify() returns, so
+                # matching on flag text overcounts. fired_checks is the checks
+                # themselves — use it for any gate or dimension analysis.
+                "fired_checks": sbh["verification"].get("fired_checks"),
                 "elapsed_s": round(elapsed, 2),
                 # Recorded, never applied here — compare_arms.py scores both ways.
                 "stop_and_ask": stop_and_ask,
