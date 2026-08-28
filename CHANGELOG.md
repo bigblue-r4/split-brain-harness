@@ -20,15 +20,38 @@ All notable changes to split-brain-harness are documented here.
   of the fingerprint never fires at all: these models report high risk whenever they
   report urgency (the corpus holds 32 rows of exactly the opposite pattern).
 - **Effect.** Even when the gate does open, the verdict changes nothing.
-  `confidence` is copied out of `disagreement` before the reconcile block, and
-  `stop_and_ask` / `passed` derive from that copy; `reconcile_verdict` has no reader in
-  production code. New test `reconcile_verdict_cannot_change_the_decision` runs
-  identical input through both modes with a maximally dissenting adjudicator and
-  asserts every scored field is equal. **It fails if the verdict is ever wired in** —
-  which is the signal to re-measure, not to relax the assertion.
+  `confidence` was copied out of `disagreement` before the reconcile block, and
+  `stop_and_ask` / `passed` derived from that copy, while `reconcile_verdict` had no
+  reader in production code at all. **This half is now fixed — see Changed below.**
 - `scripts/reconcile_gate.py` reproduces the gate numbers from any bench artifact.
-- Nothing about the pipeline's behaviour changed here. This release records what the
-  code already did.
+
+### Changed
+
+**The adjudicator verdict now feeds the decision — escalate-only**
+- `VerifyMode::Reconcile` wires the adjudicator's verdict into `stop_and_ask` under a
+  ratchet: **`injection` escalates; `benign`, `ambiguous`, an unrecognised string, a
+  parse failure and an unreachable adjudicator all change nothing.**
+- The asymmetry is a security argument, not a statistical one. The gate opens only on
+  rows already judged suspicious, and the payload that raised those flags is in the
+  adjudicator's own prompt — so a `benign` verdict is the suspect input arguing its own
+  case to a third model. Honouring it would let a payload that talks its way past one
+  call clear the flags raised against it. A wrong `injection` costs one unnecessary
+  `stop_and_ask` on an already-flagged row; the payoffs are not symmetric, so neither
+  is the code.
+- Verdict matching normalises case and whitespace: safety must not hinge on a model
+  shouting.
+- `passed` needed no wiring — the gate implies at least two fired checks, so `passed`
+  is already `false` whenever the adjudicator runs.
+- **No published benchmark is affected.** Every benchmark in this repo ran at
+  `deterministic` or `llm` verify mode, and `llm_mode_never_escalates` pins that
+  neither consults an adjudicator.
+- Seven tests cover the semantics, including a baseline test asserting the scenario
+  does not already stop — without which the escalation test would pass vacuously.
+- **This does not make the path measurable.** The gate still opens 0 times in 1,002
+  rows, so a Reconcile-vs-Llm benchmark would still return exactly zero — now for one
+  reason instead of two. Giving the gate a trigger these models can produce is a change
+  to detection behaviour with its own false-positive cost, and is deliberately not
+  bundled here so the two effects stay attributable.
 
 ---
 
