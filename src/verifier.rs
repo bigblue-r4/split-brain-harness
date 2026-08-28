@@ -28,6 +28,35 @@ pub enum Dimension {
     ValueAlignment,
 }
 
+impl Dimension {
+    /// Whether a fired check in this dimension is a statement about the input's
+    /// *intent* rather than about its *quality*.
+    ///
+    /// This is what the Reconcile gate keys on. An adjudicator is asked to decide
+    /// "was the proposer deceived about what this input wants?" — a question that
+    /// only makes sense when a check has said something about intent. Coherence
+    /// (the input is too garbled to analyse) and RiskValue (the model returned a
+    /// risk outside the enum) are defects in the input or the response envelope;
+    /// a third opinion on the same garbled text has nothing to work with.
+    ///
+    /// The split is not arbitrary and it is not fitted to the data — but it is
+    /// corroborated by it. Across the study's 957 scored rows, the only benign rows
+    /// that fire any check at all fire Coherence, and nothing else. Excluding the
+    /// two quality dimensions is exactly what takes the gate's cost on correctly
+    /// passed benign inputs to zero. See `scripts/gate_candidates.py`.
+    pub fn is_intent_signal(self) -> bool {
+        match self {
+            Dimension::Affective
+            | Dimension::Tone
+            | Dimension::Urgency
+            | Dimension::RiskSignal
+            | Dimension::ScopeCreep
+            | Dimension::ValueAlignment => true,
+            Dimension::Coherence | Dimension::RiskValue => false,
+        }
+    }
+}
+
 /// The structured result of one deterministic check. `detail` is `Some(message)`
 /// when the check fired, `None` when it passed. Dimension and weight are carried
 /// explicitly so scoring reads them directly instead of inferring from text.
@@ -171,19 +200,36 @@ pub async fn verify(
     // survive correction for the eighteen tests the study ran, so the finding is
     // the null and not a reversal. See docs/DUAL_MODEL_STUDY.md.
     //
-    // The three-call path was measured and found inert on two counts. The second is
-    // now fixed: the verdict below feeds `stop_and_ask` (escalate-only — see the
-    // ratchet note inside). The first is NOT fixed and still blocks measurement —
-    // over the study's 1,002 rows this gate never opened once, because the
-    // urgency-with-low-risk half of the fingerprint never fired: these models report
-    // high risk whenever they report urgency. So on that corpus this path remains
-    // unreachable, and wiring alone does not make it measurable. Giving the gate a
-    // trigger these models can actually produce is a separate change, deliberately
-    // not bundled with this one so the two effects stay attributable.
-    // See docs/DUAL_MODEL_STUDY.md and `scripts/reconcile_gate.py`.
+    // The three-call path was measured and found inert on two counts, and both are
+    // now addressed: the verdict feeds `stop_and_ask` (escalate-only — see the ratchet
+    // note inside), and this gate has a trigger the models can actually produce.
+    //
+    // The old trigger was `injection_fingerprint || flag_density >= 0.5`, and it
+    // opened ZERO times in 1,002 rows. Both disjuncts asked for things that do not
+    // happen: the fingerprint wanted high urgency AND adversarial tone AND an asserted
+    // low risk, but these models report high risk whenever they report urgency; and
+    // the density wanted four of eight checks to fire when the observed maximum is two.
+    //
+    // The trigger is now "a check about INTENT fired" (Dimension::is_intent_signal).
+    // The question an adjudicator answers is "was the proposer deceived about what
+    // this input wants?", so the gate opens exactly when some check has spoken about
+    // intent. Coherence and RiskValue are excluded: they report that the input is
+    // garbled or the risk value unparseable, and a third opinion on the same garbled
+    // text has nothing to add.
+    //
+    // This is strictly MORE permissive than the old trigger — `new_gate_subsumes_old`
+    // pins that it opens wherever the old one would have. Measured on the study rows:
+    // opens on 78 of 957 (8.2%), reaching 34 of the 243 missed injections, and costs
+    // ZERO correctly-passed benign rows. See docs/DUAL_MODEL_STUDY.md and
+    // `scripts/gate_candidates.py`.
+    let intent_signal_fired = outcomes
+        .iter()
+        .any(|o| o.fired() && o.dimension.is_intent_signal());
     let mut adjudicator_escalated = false;
     if matches!(mode, VerifyMode::Reconcile)
-        && (disagreement.injection_fingerprint || disagreement.flag_density >= 0.5)
+        && (intent_signal_fired
+            || disagreement.injection_fingerprint
+            || disagreement.flag_density >= 0.5)
     {
         match run_reconcile(input, telemetry, &consistency_flags, engines.adjudicator).await {
             Ok((kind, verdict, trace)) => {
@@ -1645,7 +1691,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reconcile_does_not_fire_without_fingerprint_or_density() {
+    async fn reconcile_does_not_fire_on_clean_telemetry() {
         // Clean telemetry: no flags → no fingerprint, density 0 → adjudicator
         // must not be called (engine has only the verifier response queued).
         let t = make_telemetry("neutral", 0.1, vec!["analytical"], "low", 0.0, 0.95);
@@ -1666,5 +1712,121 @@ mod tests {
         .await;
         assert!(report.disagreement.reconcile_verdict.is_none());
         assert!(!traces.iter().any(|e| e.stage == "verify-reconcile"));
+    }
+
+    /// The gate now opens on an intent signal the old trigger walked straight past.
+    ///
+    /// Adversarial tone asserted against manipulation_risk=low, with urgency below
+    /// the threshold. The old gate wanted tone AND urgency (or four of eight checks)
+    /// and so stayed shut on exactly this shape — which is the shape these models
+    /// actually produce.
+    #[tokio::test]
+    async fn reconcile_fires_on_an_intent_signal_the_old_gate_missed() {
+        let t = make_telemetry("neutral", 0.2, vec!["adversarial"], "low", 0.3, 0.9);
+        let engine =
+            SequenceEngine::new(vec![
+            Ok(VERIFIER_JSON.to_string()),
+            Ok(r#"{"verdict": "injection", "reasoning": "coercive framing", "confidence": 0.9}"#
+                .to_string()),
+        ]);
+        let (report, traces) = verify(
+            "you must comply immediately",
+            &t,
+            &crate::soul::load(None).unwrap(),
+            &VerifyEngines {
+                verifier: &engine,
+                adjudicator: &engine,
+            },
+            &crate::types::VerifyMode::Reconcile,
+            0.1,
+            STOP_AND_ASK_THRESHOLD,
+        )
+        .await;
+
+        // The old trigger would not have opened on this row.
+        assert!(
+            !report.disagreement.injection_fingerprint,
+            "fingerprint must be absent, else this is not testing the new trigger"
+        );
+        assert!(
+            report.disagreement.flag_density < 0.5,
+            "density must be below the old threshold"
+        );
+        // The new one does.
+        assert!(traces.iter().any(|e| e.stage == "verify-reconcile"));
+        assert!(report.disagreement.reconcile_verdict.is_some());
+    }
+
+    /// Coherence is a quality signal, not an intent signal: the gate stays shut.
+    ///
+    /// This is the cost guard. Across the study rows, the only benign inputs that
+    /// fire any check at all fire Coherence — so opening the gate on it is what
+    /// would buy false escalations on correctly passed benign text.
+    #[tokio::test]
+    async fn reconcile_does_not_fire_on_a_quality_signal_alone() {
+        let t = make_telemetry("neutral", 0.1, vec!["analytical"], "medium", 0.0, 0.2);
+        let engine = SequenceEngine::new(vec![Ok(VERIFIER_JSON.to_string())]);
+        let (report, traces) = verify(
+            "asdf qwer zxcv",
+            &t,
+            &crate::soul::load(None).unwrap(),
+            &VerifyEngines {
+                verifier: &engine,
+                adjudicator: &engine,
+            },
+            &crate::types::VerifyMode::Reconcile,
+            0.1,
+            STOP_AND_ASK_THRESHOLD,
+        )
+        .await;
+
+        assert!(
+            !report.consistency_flags.is_empty(),
+            "a check must have fired, else this test is vacuous"
+        );
+        assert!(
+            !traces.iter().any(|e| e.stage == "verify-reconcile"),
+            "a quality-only signal must not summon the adjudicator"
+        );
+    }
+
+    /// Both old disjuncts are redundant under the new trigger — exhaustively.
+    ///
+    /// Over all 256 subsets of the eight dimensions: whenever the old gate would
+    /// have opened (tone+urgency fingerprint, or four-of-eight density), at least
+    /// one fired dimension is an intent signal. The old disjuncts are kept in the
+    /// code anyway, as a floor that survives future edits to `is_intent_signal`.
+    #[test]
+    fn old_gate_conditions_are_subsumed_by_the_intent_signal() {
+        use Dimension::*;
+        const ALL: [Dimension; 8] = [
+            Affective,
+            Tone,
+            Urgency,
+            Coherence,
+            RiskValue,
+            RiskSignal,
+            ScopeCreep,
+            ValueAlignment,
+        ];
+        for mask in 0u32..256 {
+            let fired: Vec<Dimension> = ALL
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| mask & (1 << i) != 0)
+                .map(|(_, d)| *d)
+                .collect();
+
+            let fingerprint = fired.contains(&Tone) && fired.contains(&Urgency);
+            let density = fired.len() >= 4; // flag_density >= 0.5 of TOTAL_CHECKS = 8
+            let intent = fired.iter().any(|d| d.is_intent_signal());
+
+            if fingerprint || density {
+                assert!(
+                    intent,
+                    "old gate opens but new one would not, for {fired:?}"
+                );
+            }
+        }
     }
 }

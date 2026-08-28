@@ -47,11 +47,41 @@ All notable changes to split-brain-harness are documented here.
   neither consults an adjudicator.
 - Seven tests cover the semantics, including a baseline test asserting the scenario
   does not already stop — without which the escalation test would pass vacuously.
-- **This does not make the path measurable.** The gate still opens 0 times in 1,002
-  rows, so a Reconcile-vs-Llm benchmark would still return exactly zero — now for one
-  reason instead of two. Giving the gate a trigger these models can produce is a change
-  to detection behaviour with its own false-positive cost, and is deliberately not
-  bundled here so the two effects stay attributable.
+- Wiring alone did not make the path measurable — the gate still had to be fixed, which
+  the next entry does.
+
+**The Reconcile gate has a reachable trigger**
+- The old trigger (`injection_fingerprint || flag_density >= 0.5`) opened **0 times in
+  1,002 rows**. Both disjuncts asked for things these models do not produce: the
+  fingerprint wanted adversarial tone AND high urgency AND an asserted low risk (they
+  report high risk whenever they report urgency), and the density wanted four of eight
+  checks when the observed per-row maximum is two.
+- The trigger is now **"a check about intent fired"** (`Dimension::is_intent_signal`).
+  Coherence and RiskValue are excluded as quality signals — a third opinion on garbled
+  text has nothing to work with. Opens on **78 of 957 rows (8.2%)**.
+- The split was scored against labels, not tuned until it fired
+  (`scripts/gate_candidates.py`): it reaches **34 of the 243 missed injections (14.0%)**
+  at a cost of **zero** correctly-passed benign rows. Including Coherence would reach 5
+  more misses and cost 3 false escalations — **the only benign rows in the corpus that
+  fire any check fire Coherence, and nothing else.**
+- Both old disjuncts are kept as a floor, though
+  `old_gate_conditions_are_subsumed_by_the_intent_signal` proves them redundant across
+  all 256 dimension subsets.
+- **Stated before the run:** 14.0% is a ceiling, not an expectation — the adjudicator
+  must actually return `injection` to convert a row. The deeper limit is not the gate:
+  the proposer's telemetry raises no flag at all on 84% of the injections it misses.
+
+### Fixed
+
+**`scripts/reconcile_gate.py` counted a flag the gate cannot see**
+- `stage_obfuscation` inserts an "obfuscation detected" string into `consistency_flags`
+  *after* `verify()` returns, so it is in every artifact but was never visible to the
+  gate. The first version of the script counted it toward `flag_density`.
+- The conclusion was unaffected (0 either way, and correct counting puts the old gate
+  further from firing — the real per-row maximum is 2 fired checks, not 3), but the
+  script measured the wrong quantity.
+- `run_bench_labeled.py` now records `fired_checks`, so gate analysis need never match
+  on flag text again.
 
 ---
 

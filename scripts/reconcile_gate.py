@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
 """Measure the Reconcile adjudicator gate from artifacts already on disk.
 
-VerifyMode::Reconcile adds a third LLM call, but only when
+VerifyMode::Reconcile makes a third LLM call when the gate opens. This reports how
+often the OLD trigger opened (it never did) and how often the CURRENT one does.
 
-    disagreement.injection_fingerprint || disagreement.flag_density >= 0.5
+    old:  injection_fingerprint || flag_density >= 0.5
+    new:  a check in an INTENT dimension fired, || the two old disjuncts
 
-Both sides of that OR are recoverable from a bench artifact without re-running
-anything, because `flags` records exactly the fired consistency checks:
-`CheckOutcome::fired()` is defined as `detail.is_some()`, and `consistency_flags`
-is the list of every `detail`. So fired-set == recorded-flag-set, exactly.
+Both are recoverable from a bench artifact without re-running anything: `flags`
+records the fired checks, because `CheckOutcome::fired()` is defined as
+`detail.is_some()` and `consistency_flags` collects every `detail`.
 
-  flag_density >= 0.5  ->  len(flags) >= 4   (TOTAL_CHECKS = 8)
-  injection_fingerprint -> a Tone-dimension check AND an Urgency-dimension check
-                           both fired. Each of those two checks already requires
-                           manipulation_risk == Low to fire at all, so the third
-                           conjunct is implied and needs no separate lookup.
+CORRECTION (2026-08-27): an earlier version of this script counted the
+"obfuscation detected" string toward flag_density. That string is inserted into
+consistency_flags by `stage_obfuscation` in harness.rs AFTER verify() has returned,
+so the gate never sees it. It is excluded here. This did not change the old gate's
+result — 0 either way, and correct counting puts it further from firing, since the
+real per-row maximum is 2 fired checks rather than 3.
 
 Usage: python3 scripts/reconcile_gate.py fixtures/dualmodel_arm*.jsonl
 """
@@ -22,52 +24,68 @@ import json
 import os
 import sys
 
-TONE_FLAG = "conflicts with manipulation_risk=low"
-URGENCY_FLAG = "urgency may be manufactured"
+# flag-text signature -> dimension, and whether that dimension is an intent signal
+# (Dimension::is_intent_signal in verifier.rs). Coherence and RiskValue are quality
+# signals: they say the input is garbled or the risk value unparseable.
+CHECKS = [
+    ("high emotional_intensity", "affective", True),
+    ("conflicts with manipulation_risk=low", "tone", True),
+    ("urgency may be manufactured", "urgency", True),
+    ("input may be too incoherent", "coherence", False),
+    ("is not a recognized value", "risk_value", False),
+    ("manipulation_risk=high but", "risk_signal", True),
+    ("hidden_payload:", "scope_creep", True),
+    ("value_alignment delta", "value_alignment", True),
+]
+NOT_A_CHECK = "obfuscation detected"  # added post-verify; invisible to the gate
 TOTAL_CHECKS = 8
-DENSITY_MIN_FLAGS = int(TOTAL_CHECKS * 0.5)  # flag_density >= 0.5
 
 
-def gate(flags):
-    """Return (tone, urgency, fingerprint, density, fires) for one row."""
-    tone = any(TONE_FLAG in f for f in flags)
-    urgency = any(URGENCY_FLAG in f for f in flags)
-    fingerprint = tone and urgency
-    density = len(flags) >= DENSITY_MIN_FLAGS
-    return tone, urgency, fingerprint, density, (fingerprint or density)
+def classify(flags):
+    """-> (fired dimensions, count of real fired checks, any intent signal)."""
+    fired, intent = set(), False
+    for f in flags:
+        if NOT_A_CHECK in f:
+            continue
+        for sig, dim, is_intent in CHECKS:
+            if sig in f:
+                fired.add(dim)
+                intent = intent or is_intent
+                break
+    return fired, len(fired), intent
 
 
 def main(paths):
     if not paths:
         print(__doc__)
         return 1
-    hdr = f"{'arm':<5} {'rows':>5} {'tone':>5} {'urg':>5} {'fingerprint':>12} {'density':>8} {'GATE':>6}"
+    hdr = f"{'arm':<5} {'rows':>5} {'tone':>5} {'urg':>5} {'OLD gate':>9} {'NEW gate':>9}"
     print(hdr)
     print("-" * len(hdr))
-    tot = [0] * 5
-    n_tot = 0
+    t_rows = t_tone = t_urg = t_old = t_new = 0
     for path in paths:
         arm = os.path.basename(path).replace("dualmodel_arm", "").replace(".jsonl", "")
         rows = [json.loads(l) for l in open(path) if l.strip()]
-        acc = [0] * 5
+        tone = urg = old = new = 0
         for r in rows:
-            for i, v in enumerate(gate(r.get("flags") or [])):
-                acc[i] += bool(v)
-        n_tot += len(rows)
-        tot = [a + b for a, b in zip(tot, acc)]
-        print(
-            f"{arm:<5} {len(rows):>5} {acc[0]:>5} {acc[1]:>5} {acc[2]:>12} {acc[3]:>8} {acc[4]:>6}"
-        )
+            dims, n, intent = classify(r.get("flags") or [])
+            tone += "tone" in dims
+            urg += "urgency" in dims
+            o = ("tone" in dims and "urgency" in dims) or n >= TOTAL_CHECKS * 0.5
+            old += o
+            new += o or intent
+        t_rows += len(rows); t_tone += tone; t_urg += urg; t_old += old; t_new += new
+        print(f"{arm:<5} {len(rows):>5} {tone:>5} {urg:>5} {old:>9} {new:>9}")
     print("-" * len(hdr))
-    print(f"{'ALL':<5} {n_tot:>5} {tot[0]:>5} {tot[1]:>5} {tot[2]:>12} {tot[3]:>8} {tot[4]:>6}")
-    rate = tot[4] / n_tot if n_tot else 0.0
-    print(f"\nadjudicator fire rate: {tot[4]}/{n_tot} = {rate * 100:.2f}%")
-    if tot[4] == 0:
+    print(f"{'ALL':<5} {t_rows:>5} {t_tone:>5} {t_urg:>5} {t_old:>9} {t_new:>9}")
+    print(f"\nold trigger: {t_old}/{t_rows} = {t_old / t_rows * 100:.2f}%")
+    print(f"new trigger: {t_new}/{t_rows} = {t_new / t_rows * 100:.2f}%")
+    if t_old == 0:
         print(
-            "\nThe gate never opens on this corpus, so Reconcile makes exactly the same\n"
-            "calls as Llm here. Note this is about REACHABILITY only: even when the gate\n"
-            "does open, the verdict is not read by any decision — see\n"
-            "verifier.rs::reconcile_verdict_cannot_change_the_decision."
+            "\nThe old trigger never opened: it wanted high urgency AND adversarial tone\n"
+            "AND an asserted low risk (these models report high risk whenever they report\n"
+            "urgency), or four of eight checks when the observed maximum is two.\n"
+            "Run scripts/gate_candidates.py to score triggers against the labels."
         )
     return 0
 
