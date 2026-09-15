@@ -45,7 +45,18 @@ for arm in "${ARMS[@]}"; do
     # against an unknown noise floor. Not in the default arm list: it is a
     # calibration run, not one of the four design arms.
     B2) PROPOSER=llama3.2:3b; VERIFIER=llama3.2:3b ;;
-    *) echo "unknown arm: $arm (want B, C, D, E or B2)"; exit 1 ;;
+    # B3 is arm B again, under the mission soul (souls/soul-mission.md via
+    # SBH_SOUL_PATH). Same models as B and B2 on purpose: the only thing that
+    # differs is the system prompt, so B vs B3 isolates the soul edit and B vs B2
+    # says how much of any difference is just temperature 0.1 talking.
+    B3) PROPOSER=llama3.2:3b; VERIFIER=llama3.2:3b ;;
+    # B4 is the tightened mission (souls/soul-mission-v2.md): the same four
+    # commitments as B3 but folded into the existing objective paragraph, 257
+    # added characters instead of 786. B3 cost ~2-3 points against both B and
+    # B2 while changing no rule, so this tests whether the cost was the length
+    # rather than the content.
+    B4) PROPOSER=llama3.2:3b; VERIFIER=llama3.2:3b ;;
+    *) echo "unknown arm: $arm (want B, C, D, E, B2, B3 or B4)"; exit 1 ;;
   esac
 
   export SBH_MODEL="$PROPOSER"

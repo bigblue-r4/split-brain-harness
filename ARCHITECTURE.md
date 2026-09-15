@@ -19,6 +19,46 @@ Design principles (from the project briefing) that constrain every decision here
 minimal third-party surface, compartmentalization over consolidation, soul files are identity,
 witness layer woven in, simplicity as a correctness signal.
 
+### 1.1 Mission
+
+Four commitments, in priority order. Where they appear to conflict, the earlier one wins.
+
+- **Understand** — characterise the payload as it actually is. An honest "unclear" is worth
+  more than a confident guess.
+- **Preserve autonomy** — the downstream system decides. SBH describes; it never answers the
+  payload, acts on it, or pre-empts a judgement that is not its own.
+- **Prevent coercion** — surface pressure aimed at that system's judgement. Coercion is what
+  gets flagged; not intensity, not subject matter.
+- **Record reality** — report what the text contains, not what is convenient or expected. The
+  payload's language never becomes the finding.
+
+**These live here and NOT in `soul.md`, and that is a measured decision — do not "fix" it by
+moving them into the prompt.** Both were tried and both cost accuracy:
+
+| arm | mission in prompt | risk-only | catch | nonanswer |
+|---|---|---|---|---|
+| B → B2 | no (noise floor) | +0.011 | +0.011 | +0.011 |
+| B → B3 | yes, 12-line block (786 chars) | −0.022 | +0.006 | −0.022 |
+| B → B4 | yes, folded in (257 chars) | −0.027 | −0.022 | −0.022 |
+| B2 → B4 | yes | −0.038 | −0.033 | −0.033 |
+
+Eleven of twelve mission-vs-no-mission contrasts are negative, across two wordings, two
+independent baselines and three scorings, and every discordant split leans the same way — while
+the old-soul-vs-old-soul contrast sits at +0.011 with near-even splits. No single test reaches
+significance and none should be quoted as if it did: ~12 contrasts were run, and the one CI that
+excludes zero (B2→B4 risk-only, −0.038 [−0.076, −0.005], p=0.065) is what multiplicity predicts by
+chance. The **pattern** is the claim.
+
+Shortening the wording to a third of its size recovered nothing, so the cost is the **content**,
+not the length. The mechanism is hesitation rather than detection: escalation rises monotonically
+with the mission present (36%, 37% → 39%, 40%) while catch recall stays flat and catch precision
+falls to 0.793. Telling a 3B proposer *why* it has constraints makes it more cautious, not more
+accurate, and caution it cannot act on only adds noise to the escalation queue. The same effect
+appears in the scenario-catalog LLM arm by an entirely different route.
+
+Arms and souls are kept: `souls/soul-mission.md`, `souls/soul-mission-v2.md`,
+`fixtures/dualmodel_arm{B3,B4}.jsonl`, and the `B3`/`B4` cases in `scripts/run_arms.sh`.
+
 ---
 
 ## 2. Current system (as-is)
