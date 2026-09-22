@@ -18,11 +18,9 @@ HOST="${SBH_HOST:-127.0.0.1:8088}"
 SESSION_LOG="${SBH_SESSION_LOG:-/tmp/sbh_sessions.jsonl}"
 SESSION_ID="sbh-curl-demo-$(date +%s)"
 
-# Optional: set SBH_SERVE_KEY to test bearer auth
-AUTH_HEADER=""
-if [[ -n "${SBH_SERVE_KEY:-}" ]]; then
-  AUTH_HEADER="-H \"Authorization: Bearer $SBH_SERVE_KEY\""
-fi
+# Optional: set SBH_SERVE_KEY to test bearer auth. Expanded at each call site
+# with ${VAR:+...} so it disappears entirely when unset — building it as a
+# string here cannot work, because the quotes would be passed to curl literally.
 
 hr() { printf '\n%s\n' "$(printf '─%.0s' {1..60})"; }
 header() { hr; printf '  %s\n' "$1"; hr; }
@@ -41,6 +39,7 @@ RESP=$(curl -si \
   -X POST "http://$HOST/v1/chat/completions" \
   -H "Content-Type: application/json" \
   -H "x-sbh-session: $SESSION_ID" \
+  ${SBH_SERVE_KEY:+-H "Authorization: Bearer $SBH_SERVE_KEY"} \
   -d '{
     "model": "llama3.2:3b",
     "messages": [
@@ -66,6 +65,7 @@ RESP2=$(curl -si \
   -X POST "http://$HOST/v1/chat/completions" \
   -H "Content-Type: application/json" \
   -H "x-sbh-session: $SESSION_ID" \
+  ${SBH_SERVE_KEY:+-H "Authorization: Bearer $SBH_SERVE_KEY"} \
   -d '{
     "model": "llama3.2:3b",
     "messages": [
@@ -86,6 +86,7 @@ RESP3=$(curl -si \
   -X POST "http://$HOST/v1/chat/completions" \
   -H "Content-Type: application/json" \
   -H "x-sbh-session: $SESSION_ID" \
+  ${SBH_SERVE_KEY:+-H "Authorization: Bearer $SBH_SERVE_KEY"} \
   -d '{
     "model": "llama3.2:3b",
     "messages": [
