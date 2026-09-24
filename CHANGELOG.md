@@ -6,6 +6,24 @@ All notable changes to split-brain-harness are documented here.
 
 ## [Unreleased]
 
+### Added
+
+**Normalizer: ROT13 decode, and base64 decoded whenever it reads as prose**
+- A local red-team run found two encodings reaching Stage 1 still encoded. Bare base64
+  was decoded only when the result hit `INJECTION_KEYWORDS`, so a keyword-free payload
+  stayed opaque. ROT13 had no pass at all.
+- New ROT13 pass: a segment (split at sentence punctuation and colons) is rotated only
+  when rotation turns it into language, judged by English/German function words. One
+  `rot13` detection per input.
+- Bare base64 that decodes to readable prose is now decoded as the new `base64-text`
+  kind, including UTF-8 (a German payload with "über" was being skipped). The keyword
+  `base64` path is unchanged.
+- Both new kinds weigh 0.30, like leetspeak: the input is noted as not passed, but the
+  decoded content goes to the model, and the encoding alone never forces `stop_and_ask`.
+- Measured on 32 encoded prompts (llama3.2:3b, neutral wrapper, only the normalizer
+  differing): attacks caught 9/16 → 12/16, benign flagged 6/16 → 3/16. Small sample;
+  direction, not an effect size.
+
 ### Measured
 
 **The three-call Reconcile path is inert — measured without a single new LLM call**
