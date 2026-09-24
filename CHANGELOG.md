@@ -24,6 +24,15 @@ All notable changes to split-brain-harness are documented here.
   differing): attacks caught 9/16 → 12/16, benign flagged 6/16 → 3/16. Small sample;
   direction, not an effect size.
 
+### Fixed
+
+**Leetspeak pass no longer rewrites identifiers with a digit suffix**
+- A word whose leet characters are all one trailing run is left alone: `ROT13`,
+  `sha256`, `win32`, `Python3`, and emphasis like `Hilfe!!` (`!` is in the leet map).
+  Before, `ROT13` reached the model as `ROTie` and scored as obfuscation (0.46) on its
+  own. Leet substitutes *inside* words (`h4x0r`, `1gn0r3`, `h4ck3r5`), and that is still
+  decoded; all 8 leetspeak attacks from the red-team set are still detected.
+
 ### Measured
 
 **The three-call Reconcile path is inert — measured without a single new LLM call**
