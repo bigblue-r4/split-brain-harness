@@ -23,7 +23,8 @@ async fn main() -> Result<()> {
     // doctor, audit, and export-ollama handle their own reporting or need no model.
     let needs_backend = !matches!(
         cmd,
-        Command::Doctor
+        Command::Help
+            | Command::Doctor
             | Command::Audit { .. }
             | Command::ExportOllama { .. }
             | Command::Calibrate { .. }
@@ -63,6 +64,10 @@ async fn main() -> Result<()> {
             }
             config.dump_raw = dump_raw;
             cmd_analyze(&input, &config, raw, trace).await
+        }
+        Command::Help => {
+            println!("{USAGE}");
+            Ok(())
         }
         Command::Doctor => cmd_doctor(&config).await,
         Command::Demo {
@@ -148,7 +153,29 @@ async fn main() -> Result<()> {
 // Command dispatch
 // ---------------------------------------------------------------------------
 
+const USAGE: &str = "\
+Usage: split-brain-harness [--raw] [--trace] [--dump-prompt] [--dump-raw] \"input\"
+Usage: split-brain-harness --stdin [--raw] [--trace] [--dump-prompt] [--dump-raw]
+Usage: split-brain-harness doctor
+Usage: split-brain-harness demo [--offline] [--pause] [--raw] [--export <file.md>]
+Usage: split-brain-harness demo --serve [--offline] [--pause] [--export <file.md>]
+Usage: split-brain-harness export-ollama --base <model> [--output <file>] [--no-context]
+Usage: split-brain-harness debug-bundle [--output <file>] \"input\"
+Usage: split-brain-harness forge \"capability\" \"input\"
+Usage: split-brain-harness serve [--listen <addr>] [--session-log <path>] [--tls-cert <pem>] [--tls-key <pem>]
+Usage: split-brain-harness bench <file.jsonl> [--baseline <prev.jsonl>] [--output <out.jsonl>] [--fail-on-regression]
+Usage: split-brain-harness calibrate [--store <path>]
+Usage: split-brain-harness tune-weights [--store <path>]
+Usage: split-brain-harness introspect [--store <path>] [--session-log <path>] [--min-cluster <n>] [--json]
+Usage: split-brain-harness feedback --fingerprint <fp> (--correct | --misread) [--store <path>]
+Usage: split-brain-harness visualize [<trace.json>] [--output <out.html>]   (or pipe `analyze --raw`)
+Usage: split-brain-harness formal-check <rules.toml|dir> [\"input text\"]";
+
 enum Command {
+    /// `--help` / `-h` anywhere: print usage and exit 0. Before this, the flag
+    /// was silently dropped — `serve --help` started the server, and
+    /// `"text" --help` sent the text to the model.
+    Help,
     Analyze {
         raw: bool,
         trace: bool,
@@ -269,6 +296,10 @@ fn flag_value(args: &[String], flag: &str) -> Option<String> {
 }
 
 fn parse_command(args: &[String]) -> Result<Command> {
+    // Checked first so no subcommand can act on it (args[0] is the binary).
+    if args.iter().skip(1).any(|a| a == "--help" || a == "-h") {
+        return Ok(Command::Help);
+    }
     let raw = args.contains(&"--raw".to_string());
     let show_trace = args.contains(&"--trace".to_string());
     let dump_prompt = args.contains(&"--dump-prompt".to_string());
@@ -478,24 +509,7 @@ fn parse_command(args: &[String]) -> Result<Command> {
     }
 
     if positional.is_empty() {
-        return Err(anyhow!(
-            "Usage: split-brain-harness [--raw] [--trace] [--dump-prompt] [--dump-raw] \"input\"\n\
-             Usage: split-brain-harness --stdin [--raw] [--trace] [--dump-prompt] [--dump-raw]\n\
-             Usage: split-brain-harness doctor\n\
-             Usage: split-brain-harness demo [--offline] [--pause] [--raw] [--export <file.md>]\n\
-             Usage: split-brain-harness demo --serve [--offline] [--pause] [--export <file.md>]\n\
-             Usage: split-brain-harness export-ollama --base <model> [--output <file>] [--no-context]\n\
-             Usage: split-brain-harness debug-bundle [--output <file>] \"input\"\n\
-             Usage: split-brain-harness forge \"capability\" \"input\"\n\
-             Usage: split-brain-harness serve [--listen <addr>] [--session-log <path>] [--tls-cert <pem>] [--tls-key <pem>]\n\
-             Usage: split-brain-harness bench <file.jsonl> [--baseline <prev.jsonl>] [--output <out.jsonl>] [--fail-on-regression]\n\
-             Usage: split-brain-harness calibrate [--store <path>]\n\
-             Usage: split-brain-harness tune-weights [--store <path>]\n\
-             Usage: split-brain-harness introspect [--store <path>] [--session-log <path>] [--min-cluster <n>] [--json]\n\
-             Usage: split-brain-harness feedback --fingerprint <fp> (--correct | --misread) [--store <path>]\n\
-             Usage: split-brain-harness visualize [<trace.json>] [--output <out.html>]   (or pipe `analyze --raw`)\n\
-             Usage: split-brain-harness formal-check <rules.toml|dir> [\"input text\"]"
-        ));
+        return Err(anyhow!(USAGE));
     }
 
     Ok(Command::Analyze {
@@ -3057,6 +3071,41 @@ mod tests {
     fn parse_doctor() {
         let a = args(&["sbh", "doctor"]);
         assert!(matches!(parse_command(&a).unwrap(), Command::Doctor));
+    }
+
+    #[test]
+    fn help_wins_over_every_subcommand() {
+        // `serve --help` used to start the server; `"text" --help` analyzed the text.
+        for v in [
+            &["sbh", "--help"][..],
+            &["sbh", "-h"],
+            &["sbh", "serve", "--help"],
+            &["sbh", "serve", "--listen", "0.0.0.0:9000", "-h"],
+            &["sbh", "some input", "--help"],
+            &["sbh", "forge", "--help"],
+            &["sbh", "bench", "--help"],
+        ] {
+            assert!(
+                matches!(parse_command(&args(v)).unwrap(), Command::Help),
+                "{v:?} did not parse as Help"
+            );
+        }
+    }
+
+    #[test]
+    fn help_is_not_triggered_by_text_containing_it() {
+        // Only an exact argument counts; a quoted input mentioning it is input.
+        let a = args(&["sbh", "how do I use --help"]);
+        assert!(matches!(
+            parse_command(&a).unwrap(),
+            Command::Analyze { .. }
+        ));
+    }
+
+    #[test]
+    fn no_args_still_errors_with_usage() {
+        let err = parse_command(&args(&["sbh"])).err().expect("should error");
+        assert!(err.to_string().contains("Usage: split-brain-harness serve"));
     }
 
     #[test]
