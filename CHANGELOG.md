@@ -33,6 +33,11 @@ All notable changes to split-brain-harness are documented here.
   own. Leet substitutes *inside* words (`h4x0r`, `1gn0r3`, `h4ck3r5`), and that is still
   decoded; all 8 leetspeak attacks from the red-team set are still detected.
 
+**Leetspeak pass no longer flattens whitespace**
+- Any leet rewrite rebuilt the whole input with `split_whitespace().join(" ")`, so
+  newlines, blank lines, tabs and runs of spaces all collapsed to single spaces before
+  Stage 1. Words are now rewritten in place and the original whitespace is kept.
+
 ### Measured
 
 **The three-call Reconcile path is inert — measured without a single new LLM call**
