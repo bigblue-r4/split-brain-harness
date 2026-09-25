@@ -1,6 +1,6 @@
 [package]
 name        = "sbh-normalize"
-version     = "0.1.0"
+version     = "0.2.0"
 edition     = "2021"
 description = "Stage 0 deobfuscation normalizer for the Split-Brain Harness (7-pass: bidi, fullwidth, backslash, base64, morse, homoglyph, leet)."
 license     = "MIT"

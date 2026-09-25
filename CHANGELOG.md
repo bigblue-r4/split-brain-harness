@@ -4,7 +4,12 @@ All notable changes to split-brain-harness are documented here.
 
 ---
 
-## [Unreleased]
+## [1.5.0] — 2026-09-24
+
+Encoded injections now reach the model decoded: ROT13, and base64 that reads as prose,
+not only base64 that happens to contain a keyword. The Reconcile path's verdict and gate
+are live. Default-mode (`deterministic`) scoring is unchanged except through the
+normalizer.
 
 ### Added
 
@@ -23,20 +28,6 @@ All notable changes to split-brain-harness are documented here.
 - Measured on 32 encoded prompts (llama3.2:3b, neutral wrapper, only the normalizer
   differing): attacks caught 9/16 → 12/16, benign flagged 6/16 → 3/16. Small sample;
   direction, not an effect size.
-
-### Fixed
-
-**Leetspeak pass no longer rewrites identifiers with a digit suffix**
-- A word whose leet characters are all one trailing run is left alone: `ROT13`,
-  `sha256`, `win32`, `Python3`, and emphasis like `Hilfe!!` (`!` is in the leet map).
-  Before, `ROT13` reached the model as `ROTie` and scored as obfuscation (0.46) on its
-  own. Leet substitutes *inside* words (`h4x0r`, `1gn0r3`, `h4ck3r5`), and that is still
-  decoded; all 8 leetspeak attacks from the red-team set are still detected.
-
-**Leetspeak pass no longer flattens whitespace**
-- Any leet rewrite rebuilt the whole input with `split_whitespace().join(" ")`, so
-  newlines, blank lines, tabs and runs of spaces all collapsed to single spaces before
-  Stage 1. Words are now rewritten in place and the original whitespace is kept.
 
 ### Measured
 
@@ -114,6 +105,32 @@ All notable changes to split-brain-harness are documented here.
   script measured the wrong quantity.
 - `run_bench_labeled.py` now records `fired_checks`, so gate analysis need never match
   on flag text again.
+
+**Leetspeak pass no longer rewrites identifiers with a digit suffix**
+- A word whose leet characters are all one trailing run is left alone: `ROT13`,
+  `sha256`, `win32`, `Python3`, and emphasis like `Hilfe!!` (`!` is in the leet map).
+  Before, `ROT13` reached the model as `ROTie` and scored as obfuscation (0.46) on its
+  own. Leet substitutes *inside* words (`h4x0r`, `1gn0r3`, `h4ck3r5`), and that is still
+  decoded; all 8 leetspeak attacks from the red-team set are still detected.
+
+**Leetspeak pass no longer flattens whitespace**
+- Any leet rewrite rebuilt the whole input with `split_whitespace().join(" ")`, so
+  newlines, blank lines, tabs and runs of spaces all collapsed to single spaces before
+  Stage 1. Words are now rewritten in place and the original whitespace is kept.
+
+**Demo sends the bearer token (#21)**
+- `sbh demo --serve` now actually sends the configured bearer token on its chat
+  requests, so the live demo works against a key-protected `sbh serve`.
+
+**LICENSE names the right entity (#20)**
+- The copyright holder is SGAIL LLC, not "SGAIL, Inc.".
+
+### Packaging
+
+- **`sbh-normalize` 0.2.0.** `DetectionKind` gains `Base64Text` and `Rot13`. That is a
+  breaking change for anyone matching the enum exhaustively, so it takes a minor bump
+  under 0.x. Publish it before the root crate, which now requires `0.2.0`. The other
+  member crates are unchanged at 0.1.0.
 
 ---
 

@@ -1,6 +1,6 @@
 [package]
 name        = "split-brain-harness"
-version     = "1.4.0"
+version     = "1.5.0"
 edition     = "2021"
 description = "Soul-injected two-stage LLM telemetry pipeline. Wraps any LLM with affective/intent/cognitive analysis, deterministic verification, and a Stage 0 deobfuscation normalizer. Drop-in OpenAI-compatible proxy."
 license     = "MIT"
@@ -41,7 +41,7 @@ async-trait  = "0.1"
 anyhow       = "1.0"
 toml         = { version = "0.8", default-features = false, features = ["parse"] }
 base64       = "0.22"
-sbh-normalize = { path = "crates/sbh-normalize", version = "0.1.0" }
+sbh-normalize = { path = "crates/sbh-normalize", version = "0.2.0" }
 sbh-core      = { path = "crates/sbh-core", version = "0.1.0" }
 sbh-store     = { path = "crates/sbh-store", version = "0.1.0" }
 sbh-llm       = { path = "crates/sbh-llm", version = "0.1.0" }
