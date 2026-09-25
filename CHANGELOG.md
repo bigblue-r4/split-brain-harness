@@ -4,6 +4,19 @@ All notable changes to split-brain-harness are documented here.
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+**`--help` / `-h` print usage instead of being ignored**
+- The flag was never recognised, so it was silently dropped. `serve --help` started the
+  server, `"text" --help` sent the text to the model, and a bare `--help` printed usage as
+  an error (exit 1). `--help` or `-h` anywhere now prints usage to stdout and exits 0,
+  before any subcommand runs or the backend config is checked. With no arguments at all it
+  still prints usage as an error, as before.
+
+---
+
 ## [1.5.0] — 2026-09-24
 
 Encoded injections now reach the model decoded: ROT13, and base64 that reads as prose,
