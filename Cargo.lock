@@ -1302,7 +1302,7 @@ dependencies = [
 
 [[package]]
 name = "sbh-normalize"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64",
 ]
@@ -1506,7 +1506,7 @@ dependencies = [
 
 [[package]]
 name = "split-brain-harness"
-version = "1.4.0"
+version = "1.5.0"
 dependencies = [
  "anyhow",
  "async-trait",
