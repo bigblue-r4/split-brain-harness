@@ -6,6 +6,16 @@ All notable changes to split-brain-harness are documented here.
 
 ## [Unreleased]
 
+### Added
+
+**Per-decision log for `sbh serve` (`SBH_DECISION_LOG`)**
+- One JSON line per analysed request: `stop_and_ask`, `manipulation_risk`, `fired_checks`,
+  `obfuscation_score`, `escalation`, `verify_mode`, a masked client IP and an FNV-1a-64
+  fingerprint of the input. The raw input is never written, the same rule as the session log.
+- The session log records only multi-turn escalations; this records every verdict, so the
+  Harborlight witness (kiss-protocol) can hash-chain every decision the harness makes.
+- Lives in the root crate, so no member crate changes or re-publishes.
+
 ---
 
 ## [1.5.1] — 2026-10-02

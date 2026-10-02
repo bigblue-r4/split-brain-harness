@@ -37,7 +37,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{analyze, session_log, types::Config};
+use crate::{analyze, decision_log, session_log, types::Config};
 use anyhow::Context as _;
 
 // ---------------------------------------------------------------------------
@@ -447,6 +447,9 @@ pub struct ServeState {
     sessions: Arc<Mutex<HashMap<String, SessionHistory>>>,
     /// Path to append-only session escalation log. Written on every escalation event.
     session_log_path: Option<String>,
+    /// Path to append-only per-decision log (`SBH_DECISION_LOG`). Written for every analysed
+    /// request; the Harborlight witness tails it.
+    decision_log_path: Option<String>,
     /// Prometheus-style counters, shared across handler clones.
     metrics: Arc<Metrics>,
     /// Timestamp of server start, used to compute uptime.
@@ -706,6 +709,21 @@ async fn chat_completions(
         }
     }
 
+    // --- write the per-decision log (every analysed request, verdict only) ---
+    if let Some(ref log_path) = state.decision_log_path {
+        let entry = decision_log::DecisionLogEntry::new(
+            session_id.clone(),
+            session_turn_count,
+            session_escalating,
+            &result,
+            &ip,
+            user_input,
+        );
+        if let Err(e) = decision_log::append(log_path, &entry) {
+            eprintln!("sbh serve: decision log write error: {e}");
+        }
+    }
+
     // --- build response ---
     let telemetry_json = serde_json::to_string(&result).unwrap_or_else(|_| "{}".into());
     let content = format!(
@@ -841,6 +859,7 @@ pub async fn run_server(
     let max_body = config.serve_max_body_bytes;
     let auth_enabled = config.serve_key.is_some();
     let session_log_path = config.session_log_path.clone();
+    let decision_log_path = decision_log::path_from_env();
     let context_path = config.context_path.clone();
 
     let witness_cache = Arc::new(std::sync::atomic::AtomicU8::new(WITNESS_UNCONFIGURED));
@@ -870,6 +889,7 @@ pub async fn run_server(
         rate_limiter: Arc::new(ShardedRateLimiter::new()),
         sessions,
         session_log_path: session_log_path.clone(),
+        decision_log_path: decision_log_path.clone(),
         metrics: Arc::new(Metrics::default()),
         start_time: Arc::new(Instant::now()),
         witness_status: witness_cache,
@@ -896,6 +916,10 @@ pub async fn run_server(
         match &session_log_path {
             Some(p) => eprintln!("  session log: {p}"),
             None => eprintln!("  session log: disabled (set SBH_SESSION_LOG or --session-log)"),
+        };
+        match &decision_log_path {
+            Some(p) => eprintln!("  decision log: {p}"),
+            None => eprintln!("  decision log: disabled (set SBH_DECISION_LOG)"),
         };
         {
             use crate::rag::ContextCorpus;

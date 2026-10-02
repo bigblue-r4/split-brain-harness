@@ -431,6 +431,7 @@ gets the same budget as a single-model one.
 | `SBH_TIMEOUT_SECONDS` | `120` | Backend request timeout |
 | `SBH_MEMORY_PATH` | — | Forge reputation persistence path |
 | `SBH_AUDIT_PATH` | — | Forge audit log path (append-only JSONL) |
+| `SBH_DECISION_LOG` | — | `sbh serve` per-decision log (append-only JSONL, verdict + input fingerprint, no raw input) |
 | `SBH_SERVE_KEY` | — | Bearer token for serve auth |
 | `SBH_SERVE_RATE` | `60` | Rate limit requests/min/IP |
 | `SBH_SERVE_MAX_BODY` | `1048576` | Body size cap (bytes) |
