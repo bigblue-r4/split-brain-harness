@@ -7,6 +7,10 @@ pub mod embedded;
 pub mod ollama;
 pub mod openai;
 
+// `async_trait` marks the boxed future it generates `#[must_use]`, which Rust 1.99's
+// clippy flags as `double_must_use` (the boxed future is already must_use). Lint-only:
+// the generated code and the published API are unchanged.
+#[allow(clippy::double_must_use)]
 #[async_trait]
 pub trait InferenceEngine: Send + Sync {
     async fn generate(&self, system_prompt: &str, prompt_payload: &str) -> Result<String, String>;
