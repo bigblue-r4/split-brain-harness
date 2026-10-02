@@ -28,6 +28,7 @@ pub mod arbitrator;
 pub mod config;
 pub use config::validate_config;
 pub mod context_packs;
+pub mod decision_log;
 pub mod formal;
 pub mod harness;
 pub mod metered;
