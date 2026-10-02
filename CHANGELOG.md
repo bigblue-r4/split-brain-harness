@@ -6,6 +6,10 @@ All notable changes to split-brain-harness are documented here.
 
 ## [Unreleased]
 
+---
+
+## [1.5.1] — 2026-10-02
+
 ### Fixed
 
 **`--help` / `-h` print usage instead of being ignored**
