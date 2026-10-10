@@ -1,8 +1,9 @@
-# Dream Engine: Milestone 1
+# Dream Engine: research contracts and isolated controller
 
 Shared research contracts live in `sbh_core::dream`, re-exported as
-`split_brain_harness::dream`. This milestone adds data and structural validation
-only. It does not connect Dream to the CLI, harness, models, or production stores.
+`split_brain_harness::dream`. Milestone 1 adds data and structural validation. Milestone 2 adds the isolated
+`split_brain_harness::dream_engine` library controller described below. Neither
+connects Dream to the CLI, harness, serve path, or production stores.
 
 ## Reuse and architecture inspection
 
@@ -71,7 +72,7 @@ promotes memory. A future transactional store must verify authorized operators,
 run existence/admission, state transitions, and revision concurrency. Rollback
 requests can restore only Candidate; re-promotion must require fresh approval.
 
-## Limits and next milestone
+## Milestone 1 limits and handoff
 
 Actual guarantees here: no I/O or execution in the new module, speculative-only
 generated trust, oracle-free input projection, structural evidence/budget checks,
@@ -90,4 +91,140 @@ same-task memory. Preflight budgets must include hypothesis and repair/synthesis
 calls as well as evaluation and Witness calls. The current Lucid preflight reserves
 one generation call per permitted hypothesis and comparable evaluation arms;
 any later repair/synthesis generation needs an additional explicit reservation.
-No subsequent milestone is implemented here.
+This is the preserved Milestone 1 scope; Milestone 2 implementation follows below.
+
+
+## Milestone 2: isolated controller
+
+`DreamController::new(provider, config)` accepts a caller-authorized
+`FreshContextProvider` and an already approved base system/soul prompt. It never
+loads credentials, initializes a live backend, reads memory, or writes files.
+`dream(&DreamRequest, &Cancellation)` and
+`lucid(&LucidExperiment, &Cancellation)` are callable async library tools.
+No harness/transformer/serve behavior is changed. No dependency is added.
+
+### Provider and context boundary
+
+The factory creates a new `EngineSession` over the existing `InferenceEngine`
+for every inference call, including each repeated case/sample. Engines are used
+once, metered with existing `MeteredEngine`, and dropped after the call. Fresh
+context IDs are unique within a process even if a caller reuses its run ID.
+The factory receives settings; the controller rejects sessions reporting different
+settings or provider/model identity. Each call records versions, settings, context,
+and the fingerprint of the actual augmented system prompt. Unknown versions stay
+explicitly unknown.
+
+The factory is a trusted adapter boundary. It must be nonblocking, actually create
+fresh context, truthfully report identity/settings, enforce the declared seed and
+output-token ceiling, and drop/cancel its own pending work. The generic inference
+trait cannot verify a remote provider's internal state, tokenizer, or truthful
+reporting. There is deliberately no adapter wrapping a shared engine or silently
+claiming unsupported settings. This milestone tests a scripted offline factory;
+no live backend adapter is supplied or empirically validated.
+
+### Dream and memory experiment arms
+
+The interpretive and remote-association branches receive the original prompt
+independently. Synthesis receives only their explicitly serialized speculative
+claims in another fresh context. Digital Hallucination is labeled speculative
+research in every stage; generated claims can only be hypothetical or simulated.
+
+Normal branches receive no memory. `memory_recombination: Some(fragments)` adds a
+separate three-call branch/synthesis arm. Only caller-supplied fragments labeled
+Validated, from a different source task and run, are eligible. Candidate, Retired,
+and same-task/run fragments are excluded and their IDs reported. Milestone 3 must
+also store a source-input fingerprint and exclude identical prompts submitted
+under renamed task IDs; `MemoryFragment` does not yet carry that fingerprint. Empty, duplicate,
+excessive, or entirely ineligible selections are rejected before inference. State
+and source labels are caller assertions until Milestone 3 provides an authenticated
+store; this controller neither retrieves nor promotes memory.
+
+Dream reports keep `ExperimentRun` accounting, independent `BranchProposal`
+records, and the explicitly optional memory arm. Dream's branch proposals are not
+Lucid evaluation arms; its `ExperimentRun.arms` remains empty. All calls, including
+synthesis, have their own `CallRecord` provenance.
+
+### Lucid execution and evidence
+
+Each admitted run evaluates FailureReproduction and CleanBaseline first, then all
+named and permitted generated interventions independently. Original failing
+conversation/trace are included only in reproduction of the original case;
+regressions and the baseline have clean input. Every arm evaluates the same
+original/regression cases with identical repeat/sample counts, settings, token
+ceilings, and per-call timeout. Each sample has a fresh engine and receives no
+output from preceding samples or arms.
+
+Hypothesis generation is explicit opt-in and bounded to ten. Model output is
+parsed only as `GeneratedClaim`; the controller constructs hypotheses, evidence,
+and repairs. Evaluator oracles never enter serialized generation inputs. Original
+and regression prompts/identifiers, failing conversations, all trace text fields,
+base prompts, named interventions, and generated hypothesis/intervention/repair
+text are screened against all known answers. Short oracles use word boundaries;
+longer ones use conservative case-insensitive substring matching. Screening catches
+literal leakage and decoded JSON escapes, not paraphrases, encodings, or all
+semantic leakage. Benign text can still be rejected.
+
+An evaluator uses exact, case-sensitive, trimmed final-answer matching. With no
+oracle its outcome is Inconclusive. The last sample supplies the scored final
+answer; best-of-N is a separate diagnostic and cannot create an apparent repair.
+There is no model judge or Witness call.
+
+A proposed repair requires that every repeated reproduction failed and exactly
+one intervention passed every repeated original-case outcome. Zero or multiple
+supported interventions produce no repair; all supported interventions are
+recorded in the trace, and multiple support is explicitly inconclusive. The
+unique qualifying intervention is described in a single generated proposal. Its outcomes, observed
+support, counterevidence, uncertainty, and source provenance remain structured.
+A regression is declared only when the clean baseline passed all repeats and the
+intervention failed at least one. Failed or inconclusive regression evaluations
+remain counterevidence even when a new regression is not established. If the clean
+baseline already passes the original case, unique context attribution is explicitly
+inconclusive. Repeated samples support a proposal, not a proof of causality.
+No method applies the repair. No reproduced failure or no qualifying intervention
+returns a completed research report with no repair; it is not a successful fix.
+
+### Budgets, errors and cancellation
+
+Admission reserves all worst-case calls before any model invocation:
+
+- Dream: three normal branch/synthesis calls, plus three for an optional memory arm.
+- Lucid: `(2 + named_interventions + permitted_hypotheses) * cases * repeats *
+  inference_calls_per_case + permitted_hypotheses + 1 repair_call`.
+
+Limits include 1..10,000 total calls, 2..10 repeats, 1..10 samples per case,
+32 total test cases, 32 named interventions, 128 trace entries, temperature 0..2,
+and 1..8,192 output tokens. Combined outbound prompt bytes, returned output bytes,
+per-call timeouts (at most 120 seconds), and total run time (at most 600 seconds)
+are independently bounded. Caller-supplied limits can be smaller. Backend token
+settings remain a factory responsibility; byte limits enforce response admission,
+not the allocation behavior of a malicious provider.
+
+Witness budgets are rejected because Witness execution belongs to Milestone 4;
+its usage stays zero rather than pretending reserved Witness calls happened.
+Both normal and generation calls charge the run total. Failed, cancelled, and
+timed-out inference invocations remain counted. Partial successful observations
+and call metadata are retained on failure; raw private/provider diagnostic text is
+not. Preflight rejection returns an error with zero model calls. Runtime rejection
+returns a Failed report. Every output run passes `ExperimentRun.validate()`
+before completion; invalid structural records become RejectedOutput failures. `CallRecord.succeeded` means the provider response passed
+transport/privacy admission, not that a generated proposal was accepted or correct.
+
+`Cancellation` is sticky and wakes a pending call. Cancellation/timeout drops the
+pending future and owned engine; the provider must honor disposal for remote work.
+Cancellation between calls stops subsequent work. A completed final reply wins a
+simultaneous cancellation signal, and all completions remain in-memory.
+Existing `security::redact` supplies conservative privacy admission; its detection
+is incomplete and may reject benign text. No new security policy is introduced.
+
+### Verification and remaining scope
+
+`tests/dream_controller.rs` uses the existing inference trait with scripted
+providers and asserts independent payloads, no previous-run state, synthesis-only
+branch sharing, provenance/settings, memory exclusion, baseline/intervention
+comparability, original and regression oracle screening, regression reporting,
+final-answer scoring, bounded call reservations, cancellation, timeout, provider
+failure, privacy admission, and disposal. Tests do not establish live-model benefit.
+
+Recommended next milestone is Milestone 3: transactional memory candidate/revision
+persistence and authenticated operator validation. Witness/input approval and the
+advisory loop detector remain Milestone 4. Neither is implemented here.
