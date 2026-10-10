@@ -1,7 +1,7 @@
 // v2 clean-core: the foundational typed model lives in sbh-core; re-exported so
 // `crate::{types,capability,input_validation,extractor}` and the
 // `split_brain_harness::*` paths keep resolving unchanged.
-pub use sbh_core::{capability, extractor, input_validation, types};
+pub use sbh_core::{capability, dream, extractor, input_validation, types};
 
 // v2: append-only JSONL stores extracted to sbh-store; re-exported so
 // `crate::{audit,session_log,calibration}` paths resolve unchanged.
