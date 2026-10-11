@@ -327,6 +327,14 @@ pub enum MemoryState {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum MemoryRevisionRequest {
+    /// Edit untrusted content only while Candidate; authorization and revision
+    /// checks belong to the transactional operator-side store.
+    ReviseCandidate {
+        memory_id: MemoryId,
+        expected_revision: u64,
+        content: GeneratedClaim,
+        reason: String,
+    },
     Promote {
         memory_id: MemoryId,
         expected_revision: u64,
@@ -349,6 +357,12 @@ pub enum MemoryRevisionRequest {
 impl MemoryRevisionRequest {
     pub fn validate(&self) -> Result<(), String> {
         match self {
+            Self::ReviseCandidate {
+                content, reason, ..
+            } => {
+                content.validate()?;
+                nonblank(reason, "candidate revision reason")
+            }
             Self::Promote {
                 operator_approval_reference,
                 evidence,
@@ -1036,5 +1050,31 @@ mod tests {
         h.intervention.instruction = claim();
         h.source.model.clear();
         assert!(h.validate().is_err());
+    }
+    #[test]
+    fn candidate_revision_requires_untrusted_content_and_reason() {
+        let request = MemoryRevisionRequest::ReviseCandidate {
+            memory_id: "memory-1".to_string().try_into().unwrap(),
+            expected_revision: 0,
+            content: claim(),
+            reason: "Operator proposes revised untrusted content".into(),
+        };
+        request.validate().unwrap();
+        roundtrip(&request);
+        let mut invalid = serde_json::to_value(&request).unwrap();
+        invalid["reason"] = json!(" ");
+        assert!(serde_json::from_value::<MemoryRevisionRequest>(invalid)
+            .unwrap()
+            .validate()
+            .is_err());
+        let mut invalid = serde_json::to_value(&request).unwrap();
+        invalid["content"]["text"] = json!("");
+        assert!(serde_json::from_value::<MemoryRevisionRequest>(invalid)
+            .unwrap()
+            .validate()
+            .is_err());
+        let mut invalid = serde_json::to_value(&request).unwrap();
+        invalid["content"]["trust"] = json!("operator_validated");
+        assert!(serde_json::from_value::<MemoryRevisionRequest>(invalid).is_err());
     }
 }

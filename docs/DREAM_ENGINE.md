@@ -3,7 +3,9 @@
 Shared research contracts live in `sbh_core::dream`, re-exported as
 `split_brain_harness::dream`. Milestone 1 adds data and structural validation. Milestone 2 adds the isolated
 `split_brain_harness::dream_engine` library controller described below. Neither
-connects Dream to the CLI, harness, serve path, or production stores.
+connects Dream to the CLI, harness, serve path, or production stores. Milestone 3
+adds the explicit operator-side SQLite store and validated reader described in
+[DREAM_MEMORY.md](DREAM_MEMORY.md).
 
 ## Reuse and architecture inspection
 
@@ -20,8 +22,8 @@ connects Dream to the CLI, harness, serve path, or production stores.
 - `sbh-store` supplies append-only audit, calibration, session, and introspection
   records. `sbh-forge::CapabilityMemory` supplies JSON capability-pattern memory
   and reputation. Neither is a transactional Dream candidate/revision store.
-  No SQLite dependency or implementation exists in this workspace; transactional
-  persistence must be designed in Milestone 3, not assumed present.
+  At the M1 inspection there was no SQLite implementation. M3 adds a separate
+  transactional research memory store using the approved bundled rusqlite dependency.
 - `sbh-safety` already owns soul loading, capability policy, and redaction.
   The forge can execute generated tools; Dream never invokes it.
 - The harness refinement/arbitrator pipeline already records trace and model
@@ -67,10 +69,10 @@ best-of-N outcomes are separate. Test failures and declared regressions remain
 visible even if one branch succeeded. Repeated results do not prove causality.
 
 Memory revision requests declare evidence, run, revision, and operator approval
-references. A reference string is not authenticated authorization. No method
-promotes memory. A future transactional store must verify authorized operators,
-run existence/admission, state transitions, and revision concurrency. Rollback
-requests can restore only Candidate; re-promotion must require fresh approval.
+references. A reference string is not authenticated authorization. M3's operator
+store verifies scoped approval, run admission, state transitions and revision
+concurrency in a transaction. Rollback restores only Candidate; re-promotion
+requires fresh approval. Core contracts themselves grant no write authority.
 
 ## Milestone 1 limits and handoff
 
@@ -98,10 +100,12 @@ This is the preserved Milestone 1 scope; Milestone 2 implementation follows belo
 
 `DreamController::new(provider, config)` accepts a caller-authorized
 `FreshContextProvider` and an already approved base system/soul prompt. It never
-loads credentials, initializes a live backend, reads memory, or writes files.
+loads credentials, initializes a live backend, or writes files. M3 adds opt-in
+retrieval through a configured `ValidatedMemoryReader`.
 `dream(&DreamRequest, &Cancellation)` and
 `lucid(&LucidExperiment, &Cancellation)` are callable async library tools.
-No harness/transformer/serve behavior is changed. No dependency is added.
+No harness/transformer/serve behavior is changed. M2 added no dependencies; M3
+adds rusqlite only to sbh-store.
 
 ### Provider and context boundary
 
@@ -129,15 +133,13 @@ independently. Synthesis receives only their explicitly serialized speculative
 claims in another fresh context. Digital Hallucination is labeled speculative
 research in every stage; generated claims can only be hypothetical or simulated.
 
-Normal branches receive no memory. `memory_recombination: Some(fragments)` adds a
-separate three-call branch/synthesis arm. Only caller-supplied fragments labeled
-Validated, from a different source task and run, are eligible. Candidate, Retired,
-and same-task/run fragments are excluded and their IDs reported. Milestone 3 must
-also store a source-input fingerprint and exclude identical prompts submitted
-under renamed task IDs; `MemoryFragment` does not yet carry that fingerprint. Empty, duplicate,
-excessive, or entirely ineligible selections are rejected before inference. State
-and source labels are caller assertions until Milestone 3 provides an authenticated
-store; this controller neither retrieves nor promotes memory.
+Normal branches receive no memory. `memory_recombination: Some(ids)` adds a
+separate three-call branch/synthesis arm when the controller has a validated store
+reader. The reader selects current Validated heads, excluding Candidate, Retired,
+absent, same-task/run and identical trimmed source-input records, including prompts
+submitted under renamed task IDs. Excluded IDs are reported. Empty, duplicate,
+excessive or entirely ineligible selections are rejected before inference. Caller
+content cannot assert validation state. The controller has no memory write methods.
 
 Dream reports keep `ExperimentRun` accounting, independent `BranchProposal`
 records, and the explicitly optional memory arm. Dream's branch proposals are not
@@ -225,6 +227,6 @@ comparability, original and regression oracle screening, regression reporting,
 final-answer scoring, bounded call reservations, cancellation, timeout, provider
 failure, privacy admission, and disposal. Tests do not establish live-model benefit.
 
-Recommended next milestone is Milestone 3: transactional memory candidate/revision
-persistence and authenticated operator validation. Witness/input approval and the
-advisory loop detector remain Milestone 4. Neither is implemented here.
+Milestone 3 persistence and authenticated operator validation are described in
+[DREAM_MEMORY.md](DREAM_MEMORY.md). Witness/input approval and the advisory loop
+detector remain Milestone 4. Neither is implemented here.

@@ -1,5 +1,9 @@
 //! Offline research-controller tests; no live model or network adapter.
 use async_trait::async_trait;
+use sbh_store::{
+    dream_memory::MemoryStore,
+    memory_authority::{MemoryActor, OperatorAttestation, OperatorVerifier},
+};
 use split_brain_harness::{
     backends::InferenceEngine, dream::*, dream_engine::*, types::TraceEntry,
 };
@@ -365,43 +369,166 @@ async fn hallucination_is_explicitly_speculative_and_cannot_claim_observation() 
     assert!(failed.branches.is_empty());
 }
 
+struct MemoryTestVerifier;
+impl OperatorVerifier for MemoryTestVerifier {
+    fn verify(
+        &self,
+        operator: &str,
+        credential: &str,
+        _: &MemoryRevisionRequest,
+    ) -> Result<OperatorAttestation, String> {
+        if operator != "test-operator" || !credential.starts_with("test-proof:") {
+            return Err("rejected".into());
+        }
+        Ok(OperatorAttestation {
+            operator_id: operator.into(),
+            approval_reference: credential[11..].into(),
+        })
+    }
+}
+fn memory_store() -> MemoryStore {
+    MemoryStore::in_memory(Box::new(MemoryTestVerifier)).unwrap()
+}
+fn seed_memory(
+    store: &MemoryStore,
+    name: &str,
+    task: &str,
+    state: MemoryState,
+    text: &str,
+    input: &str,
+) {
+    let id: MemoryId = name.to_string().try_into().unwrap();
+    store
+        .create_candidate(
+            &id,
+            &source(task, "memory-source"),
+            input,
+            &GeneratedClaim {
+                text: text.into(),
+                trust: SpeculativeTrust::Hypothetical,
+            },
+        )
+        .unwrap();
+    if state == MemoryState::Candidate {
+        return;
+    }
+    let evidence_run: RunId = format!("evidence-{name}").try_into().unwrap();
+    let run = ExperimentRun {
+        id: evidence_run.clone(),
+        task_id: task.to_string().try_into().unwrap(),
+        mode: DreamMode::Lucid,
+        status: RunStatus::Completed,
+        inference_calls: 2,
+        witness_calls: 0,
+        max_total_calls: 2,
+        trace: vec![],
+        arms: vec![ArmRecord {
+            arm: ExperimentArm::CleanBaseline,
+            context_id: format!("evidence-context-{name}").try_into().unwrap(),
+            budget: EvaluationBudget {
+                inference_calls_per_case: 1,
+                witness_calls_per_case: 0,
+                repeats: 2,
+                max_output_tokens: 64,
+            },
+            provenance: source(task, evidence_run.as_str()),
+            results: vec![TestResult {
+                test_id: "observed".to_string().try_into().unwrap(),
+                evidence_run_id: evidence_run.clone(),
+                outcome: TestOutcome::Passed,
+                final_answer: "observed".into(),
+                best_of_n_outcome: None,
+                evidence: "observed result".into(),
+            }],
+        }],
+    };
+    store.record_run(&run, input).unwrap();
+    let approve = |reference: &str, request| {
+        let permit = store
+            .authorize(
+                &MemoryActor::Operator("test-operator".into()),
+                &format!("test-proof:{reference}"),
+                request,
+            )
+            .unwrap();
+        store.revise(permit).unwrap();
+    };
+    let reference = format!("promote-{name}");
+    approve(
+        &reference,
+        MemoryRevisionRequest::Promote {
+            memory_id: id.clone(),
+            expected_revision: 0,
+            operator_approval_reference: reference.clone(),
+            evidence: "reviewed observed results".into(),
+            evidence_run_id: evidence_run,
+        },
+    );
+    if state == MemoryState::Retired {
+        approve(
+            &format!("retire-{name}"),
+            MemoryRevisionRequest::Retire {
+                memory_id: id,
+                expected_revision: 1,
+                reason: "obsolete".into(),
+            },
+        );
+    }
+}
+
 #[tokio::test]
 async fn memory_is_explicit_separate_and_excludes_same_task_candidate_and_retired() {
     let mut request = dream();
     request.max_total_calls = 6;
-    let fragment = |id: &str, task, state, text: &str| MemoryFragment {
-        id: id.to_string().try_into().unwrap(),
-        state,
-        source: source(task, "memory-source"),
-        content: GeneratedClaim {
-            text: text.into(),
-            trust: SpeculativeTrust::Hypothetical,
-        },
-    };
-    request.memory_recombination = Some(vec![
-        fragment(
+    let store = memory_store();
+    for (id, task, state, text, input) in [
+        (
             "eligible",
             "other-task",
             MemoryState::Validated,
             "CROSS_TASK_MEMORY",
+            "other source input",
         ),
-        fragment("same", "task-1", MemoryState::Validated, "SAME_TASK_MEMORY"),
-        fragment(
+        (
+            "same",
+            "task-1",
+            MemoryState::Validated,
+            "SAME_TASK_MEMORY",
+            "other source input",
+        ),
+        (
             "candidate",
             "other-task",
             MemoryState::Candidate,
             "CANDIDATE_MEMORY",
+            "other source input",
         ),
-        fragment(
+        (
             "retired",
             "other-task",
             MemoryState::Retired,
             "RETIRED_MEMORY",
+            "other source input",
         ),
-    ]);
+        (
+            "renamed",
+            "renamed-task",
+            MemoryState::Validated,
+            "SAME_INPUT_MEMORY",
+            request.original_prompt.as_str(),
+        ),
+    ] {
+        seed_memory(&store, id, task, state, text, input);
+    }
+    request.memory_recombination = Some(
+        ["eligible", "same", "candidate", "retired", "renamed"]
+            .map(|id| id.to_string().try_into().unwrap())
+            .to_vec(),
+    );
     let provider = Scripted::new((0..6).map(|_| generated("speculative output")).collect());
     let report = DreamController::new(&provider, config())
         .unwrap()
+        .with_memory_reader(store.reader())
         .dream(&request, &Cancellation::default())
         .await
         .unwrap();
@@ -409,7 +536,7 @@ async fn memory_is_explicit_separate_and_excludes_same_task_candidate_and_retire
     assert_eq!(report.branches.len(), 3);
     let arm = report.memory_arm.unwrap();
     assert_eq!(arm.branches.len(), 3);
-    assert_eq!(arm.excluded_memory_ids.len(), 3);
+    assert_eq!(arm.excluded_memory_ids.len(), 4);
     let calls = provider.calls();
     assert!(calls[..3]
         .iter()
@@ -419,14 +546,82 @@ async fn memory_is_explicit_separate_and_excludes_same_task_candidate_and_retire
         .all(|c| c.payload.contains("CROSS_TASK_MEMORY")));
     assert!(calls.iter().all(|c| !c.payload.contains("SAME_TASK_MEMORY")
         && !c.payload.contains("CANDIDATE_MEMORY")
+        && !c.payload.contains("SAME_INPUT_MEMORY")
         && !c.payload.contains("RETIRED_MEMORY")));
     request.memory_recombination.as_mut().unwrap().remove(0);
+    assert!(DreamController::new(&provider, config())
+        .unwrap()
+        .with_memory_reader(store.reader())
+        .dream(&request, &Cancellation::default())
+        .await
+        .is_err());
+    assert_eq!(provider.calls().len(), 6);
+}
+
+#[tokio::test]
+async fn memory_requires_store_reader_and_cannot_claim_validation_by_json() {
+    let provider = Scripted::new(vec![]);
+    let mut request = dream();
+    request.max_total_calls = 6;
+    request.memory_recombination = Some(vec!["forged".to_string().try_into().unwrap()]);
     assert!(DreamController::new(&provider, config())
         .unwrap()
         .dream(&request, &Cancellation::default())
         .await
         .is_err());
-    assert_eq!(provider.calls().len(), 6);
+    let store = memory_store();
+    seed_memory(
+        &store,
+        "forged",
+        "other-task",
+        MemoryState::Candidate,
+        r#"{"state":"validated","operator":"approved"}"#,
+        "other input",
+    );
+    assert!(DreamController::new(&provider, config())
+        .unwrap()
+        .with_memory_reader(store.reader())
+        .dream(&request, &Cancellation::default())
+        .await
+        .is_err());
+    assert!(provider.calls().is_empty());
+}
+
+#[tokio::test]
+async fn retirement_after_controller_configuration_is_checked_at_retrieval() {
+    let store = memory_store();
+    seed_memory(
+        &store,
+        "m",
+        "other-task",
+        MemoryState::Validated,
+        "old memory",
+        "other input",
+    );
+    let provider = Scripted::new(vec![]);
+    let controller = DreamController::new(&provider, config())
+        .unwrap()
+        .with_memory_reader(store.reader());
+    let permit = store
+        .authorize(
+            &MemoryActor::Operator("test-operator".into()),
+            "test-proof:retire-now",
+            MemoryRevisionRequest::Retire {
+                memory_id: "m".to_string().try_into().unwrap(),
+                expected_revision: 1,
+                reason: "obsolete".into(),
+            },
+        )
+        .unwrap();
+    store.revise(permit).unwrap();
+    let mut request = dream();
+    request.max_total_calls = 6;
+    request.memory_recombination = Some(vec!["m".to_string().try_into().unwrap()]);
+    assert!(controller
+        .dream(&request, &Cancellation::default())
+        .await
+        .is_err());
+    assert!(provider.calls().is_empty());
 }
 
 #[tokio::test]

@@ -4,15 +4,16 @@
 //! that creates one fresh, configured InferenceEngine per call. Factories are
 //! a trusted adapter boundary: they must not retain conversation state and must
 //! truthfully report/enforce their settings. No tools, persistence, Witness,
-//! soul changes, or repair application are exposed by this module.
+//! soul changes, or repair application are exposed by this module. Optional
+//! research memory is retrieved only through a read-only validated store handle.
 
 use crate::{
     audit::fingerprint, backends::InferenceEngine, dream::*, metered::MeteredEngine, security,
     types::TraceEntry,
 };
+use sbh_store::dream_memory::ValidatedMemoryReader;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::HashSet,
     sync::atomic::{AtomicU64, Ordering},
     time::Duration,
 };
@@ -127,15 +128,6 @@ impl Cancellation {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct MemoryFragment {
-    pub id: MemoryId,
-    pub state: MemoryState,
-    pub source: ProvenanceRecord,
-    pub content: GeneratedClaim,
-}
-
 #[derive(Debug, Clone)]
 pub struct DreamRequest {
     pub run_id: RunId,
@@ -143,8 +135,8 @@ pub struct DreamRequest {
     pub mode: DreamMode,
     pub original_prompt: String,
     pub max_total_calls: u64,
-    /// Explicit optional arm; no memory is read from disk by this controller.
-    pub memory_recombination: Option<Vec<MemoryFragment>>,
+    /// Explicit IDs only; content/state are selected by the configured reader.
+    pub memory_recombination: Option<Vec<MemoryId>>,
 }
 
 #[derive(Debug, Clone)]
@@ -207,6 +199,7 @@ pub struct DreamController<'a> {
     provider: &'a dyn FreshContextProvider,
     config: ControllerConfig,
     profile: ProviderProfile,
+    memory_reader: Option<ValidatedMemoryReader>,
 }
 
 struct RunState {
@@ -293,7 +286,14 @@ impl<'a> DreamController<'a> {
             provider,
             config,
             profile,
+            memory_reader: None,
         })
+    }
+
+    /// Grants retrieval only; the controller never receives the operator writer.
+    pub fn with_memory_reader(mut self, reader: ValidatedMemoryReader) -> Self {
+        self.memory_reader = Some(reader);
+        self
     }
 
     fn system(&self, instruction: &str) -> String {
@@ -413,26 +413,28 @@ impl<'a> DreamController<'a> {
         let mut eligible = vec![];
         let mut excluded = vec![];
         if let Some(memory) = &request.memory_recombination {
-            if memory.is_empty() || memory.len() > 32 {
-                return Err("memory arm requires 1..32 supplied fragments".into());
+            let reader = self
+                .memory_reader
+                .as_ref()
+                .ok_or("memory arm requires a validated store reader")?;
+            for id in memory {
+                screen_private(id.as_str(), self.config.max_input_bytes)?;
             }
-            let mut ids = HashSet::new();
-            for fragment in memory {
-                screen_private(fragment.id.as_str(), self.config.max_input_bytes)?;
-                if !ids.insert(&fragment.id) {
-                    return Err("duplicate memory ID".into());
-                }
-                if fragment.state != MemoryState::Validated
-                    || fragment.source.source_task_id == request.task_id
-                    || fragment.source.source_run_id == request.run_id
-                {
-                    excluded.push(fragment.id.clone());
-                    continue;
-                }
-                fragment.source.validate()?;
-                fragment.content.validate()?;
-                screen_private(&fragment.content.text, self.config.max_input_bytes)?;
-                eligible.push(fragment);
+            let selection = reader.select(
+                memory,
+                &request.task_id,
+                &request.run_id,
+                &request.original_prompt,
+            )?;
+            eligible = selection.eligible;
+            excluded = selection.excluded;
+            for fragment in &eligible {
+                screen_private(&fragment.content().text, self.config.max_input_bytes)?;
+                screen_private(
+                    &serde_json::to_string(fragment.source())
+                        .map_err(|_| "invalid memory provenance")?,
+                    self.config.max_input_bytes,
+                )?;
             }
             if eligible.is_empty() {
                 return Err("memory arm has no eligible cross-task validated fragments".into());
@@ -446,7 +448,7 @@ impl<'a> DreamController<'a> {
         if request.max_total_calls < required {
             return Err("insufficient budget for independent branches and synthesis".into());
         }
-        let memory_text: Vec<&str> = eligible.iter().map(|m| m.content.text.as_str()).collect();
+        let memory_text: Vec<&str> = eligible.iter().map(|m| m.content().text.as_str()).collect();
         screen_private(&serde_json::json!({"original_prompt":request.original_prompt, "memory_fragments":memory_text}).to_string(), self.config.max_input_bytes)?;
         let mut state = RunState::new(
             request.run_id.clone(),
@@ -461,7 +463,7 @@ impl<'a> DreamController<'a> {
             .as_ref()
             .map(|_| DreamMemoryArm {
                 arm: ExperimentArm::MemoryRecombination {
-                    memory_ids: eligible.iter().map(|m| m.id.clone()).collect(),
+                    memory_ids: eligible.iter().map(|m| m.id().clone()).collect(),
                 },
                 excluded_memory_ids: excluded,
                 branches: vec![],
