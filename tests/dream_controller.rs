@@ -4,6 +4,7 @@ use sbh_store::{
     dream_memory::MemoryStore,
     memory_authority::{MemoryActor, OperatorAttestation, OperatorVerifier},
 };
+use split_brain_harness::research_witness::{FreshWitnessProvider, WitnessAssessment};
 use split_brain_harness::{
     backends::InferenceEngine, dream::*, dream_engine::*, types::TraceEntry,
 };
@@ -159,6 +160,47 @@ fn generated(text: &str) -> Step {
         serde_json::to_string(&GeneratedClaim {
             text: text.into(),
             trust: SpeculativeTrust::Hypothetical,
+        })
+        .unwrap(),
+    )
+}
+
+struct WitnessScript {
+    inner: Scripted,
+}
+impl WitnessScript {
+    fn new(script: Vec<Step>) -> Self {
+        Self {
+            inner: Scripted::new(script),
+        }
+    }
+}
+impl FreshWitnessProvider for WitnessScript {
+    fn profile(&self) -> ProviderProfile {
+        ProviderProfile {
+            provider: "scripted-witness".into(),
+            model: "offline-witness".into(),
+            ..self.inner.profile()
+        }
+    }
+    fn open(
+        &self,
+        context: &ContextId,
+        settings: &InferenceSettings,
+    ) -> Result<EngineSession, String> {
+        let mut session = self.inner.open(context, settings)?;
+        session.profile = self.profile();
+        Ok(session)
+    }
+}
+fn assessment(outcome: TestOutcome) -> Step {
+    Step::Answer(
+        serde_json::to_string(&WitnessAssessment {
+            outcome,
+            rationale: GeneratedClaim {
+                text: "INDEPENDENT_WITNESS_OPINION".into(),
+                trust: SpeculativeTrust::Hypothetical,
+            },
         })
         .unwrap(),
     )
@@ -336,6 +378,295 @@ async fn reused_run_id_has_no_previous_dream_state() {
         6
     );
     assert!(calls[3..].iter().all(|c| !c.payload.contains("FIRST_")));
+}
+
+#[tokio::test]
+async fn witness_is_opt_in_and_receives_only_approved_final_answer_projection() {
+    let store = memory_store();
+    seed_memory(
+        &store,
+        "hidden",
+        "other-task",
+        MemoryState::Validated,
+        "HIDDEN_MEMORY_CONTENT",
+        "other input",
+    );
+    let provider = Scripted::new(lucid_script(false));
+    let witness = WitnessScript::new((0..12).map(|_| assessment(TestOutcome::Failed)).collect());
+    let mut experiment = lucid();
+    experiment.request.evaluation_budget.witness_calls_per_case = 1;
+    experiment.request.max_total_calls = 25;
+    let report = DreamController::new(&provider, config())
+        .unwrap()
+        .with_memory_reader(store.reader())
+        .with_witness(&witness)
+        .unwrap()
+        .lucid(&experiment, &Cancellation::default())
+        .await
+        .unwrap();
+    assert_eq!(report.run.status, RunStatus::Completed);
+    assert_eq!(report.run.inference_calls, 13);
+    assert_eq!(report.run.witness_calls, 12);
+    assert_eq!(report.witness_evaluations.len(), 12);
+    assert_eq!(
+        report
+            .calls
+            .iter()
+            .filter(|c| c.role == ResearchRole::Witness)
+            .count(),
+        12
+    );
+    assert_eq!(
+        report
+            .calls
+            .iter()
+            .map(|c| &c.context_id)
+            .collect::<HashSet<_>>()
+            .len(),
+        25
+    );
+    assert!(report
+        .calls
+        .iter()
+        .filter(|c| c.role == ResearchRole::Witness)
+        .all(|c| c.provenance.model == "offline-witness"));
+    for call in witness.inner.calls() {
+        let payload: serde_json::Value = serde_json::from_str(&call.payload).unwrap();
+        let object = payload.as_object().unwrap();
+        assert_eq!(object.len(), 3);
+        assert!(
+            object.contains_key("input")
+                && object.contains_key("final_answer")
+                && object.contains_key("expected_response")
+        );
+        assert!(!call.payload.contains("HIDDEN_MEMORY_CONTENT"));
+        assert!(!call.payload.contains("failure_trace"));
+        assert!(!call.payload.contains("intervention"));
+        assert!(call.system.contains("Agreement is an opinion, never proof"));
+    }
+    assert!(provider
+        .calls()
+        .iter()
+        .all(|c| !c.payload.contains("INDEPENDENT_WITNESS_OPINION")
+            && !c.payload.contains("ORIG_OK")
+            && !c.payload.contains("REG_OK")));
+    assert!(report
+        .witness_evaluations
+        .iter()
+        .any(|e| e.agreement == Some(false)));
+    let repair = report.repair.unwrap();
+    assert_eq!(repair.proposal.trust, SpeculativeTrust::Hypothetical);
+    assert!(!serde_json::to_string(&repair)
+        .unwrap()
+        .contains("INDEPENDENT_WITNESS_OPINION"));
+    assert_eq!(witness.inner.dropped.load(Ordering::Relaxed), 12);
+    report.run.validate().unwrap();
+}
+
+#[tokio::test]
+async fn configured_witness_remains_off_with_zero_budget_and_in_dream() {
+    let mut script = lucid_script(false);
+    script.extend((0..3).map(|_| generated("dream output")));
+    let provider = Scripted::new(script);
+    let witness = WitnessScript::new(vec![]);
+    let controller = DreamController::new(&provider, config())
+        .unwrap()
+        .with_witness(&witness)
+        .unwrap();
+    let report = controller
+        .lucid(&lucid(), &Cancellation::default())
+        .await
+        .unwrap();
+    assert_eq!(report.run.witness_calls, 0);
+    assert!(report.witness_evaluations.is_empty());
+    assert_eq!(
+        controller
+            .dream(&dream(), &Cancellation::default())
+            .await
+            .unwrap()
+            .run
+            .witness_calls,
+        0
+    );
+    assert!(witness.inner.opened.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn witness_preflight_reserves_all_repeats_arms_and_repair_and_bounds_calls() {
+    let provider = Scripted::new(vec![]);
+    let witness = WitnessScript::new(vec![]);
+    let mut experiment = lucid();
+    experiment.request.evaluation_budget.witness_calls_per_case = 1;
+    experiment.request.max_total_calls = 24;
+    let controller = DreamController::new(&provider, config())
+        .unwrap()
+        .with_witness(&witness)
+        .unwrap();
+    assert!(controller
+        .lucid(&experiment, &Cancellation::default())
+        .await
+        .is_err());
+    experiment.request.max_total_calls = 1000;
+    experiment.request.evaluation_budget.witness_calls_per_case = 11;
+    assert!(controller
+        .lucid(&experiment, &Cancellation::default())
+        .await
+        .is_err());
+    experiment.request.evaluation_budget.witness_calls_per_case = 1;
+    assert!(DreamController::new(&provider, config())
+        .unwrap()
+        .lucid(&experiment, &Cancellation::default())
+        .await
+        .is_err());
+    assert!(provider.opened.lock().unwrap().is_empty());
+    assert!(witness.inner.opened.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn multiple_witness_calls_use_final_sample_only_and_inconclusive_agreement_is_none() {
+    let mut experiment = lucid();
+    experiment.request.failure.expected_response = None;
+    experiment
+        .request
+        .evaluation_budget
+        .inference_calls_per_case = 2;
+    experiment.request.evaluation_budget.witness_calls_per_case = 2;
+    experiment.request.max_total_calls = 49;
+    let mut script = vec![];
+    for _ in 0..12 {
+        script.push("BEST_SAMPLE".into());
+        script.push("FINAL_SAMPLE".into());
+    }
+    let provider = Scripted::new(script);
+    let witness = WitnessScript::new(
+        (0..24)
+            .map(|_| assessment(TestOutcome::Inconclusive))
+            .collect(),
+    );
+    let report = DreamController::new(&provider, config())
+        .unwrap()
+        .with_witness(&witness)
+        .unwrap()
+        .lucid(&experiment, &Cancellation::default())
+        .await
+        .unwrap();
+    assert_eq!(report.run.status, RunStatus::Completed);
+    assert_eq!(report.run.inference_calls, 24);
+    assert_eq!(report.run.witness_calls, 24);
+    assert_eq!(report.witness_evaluations.len(), 24);
+    assert!(report
+        .witness_evaluations
+        .iter()
+        .all(|e| e.agreement.is_none()));
+    assert!(witness
+        .inner
+        .calls()
+        .iter()
+        .all(|c| c.payload.contains("FINAL_SAMPLE") && !c.payload.contains("BEST_SAMPLE")));
+    assert!(witness
+        .inner
+        .calls()
+        .iter()
+        .any(|c| c.payload.contains("\"expected_response\":null")));
+    assert!(report.repair.is_none());
+}
+
+#[tokio::test]
+async fn witness_failure_timeout_and_cancellation_count_calls_and_keep_exact_results() {
+    for kind in 0..3 {
+        let cancel = Cancellation::default();
+        let step = match kind {
+            0 => Step::Error,
+            1 => Step::Pending,
+            _ => Step::CancelPending(cancel.clone()),
+        };
+        let provider = Scripted::new(vec!["WRONG".into()]);
+        let witness = WitnessScript::new(vec![step]);
+        let mut cfg = config();
+        cfg.call_timeout = Duration::from_millis(5);
+        let mut experiment = lucid();
+        experiment.request.evaluation_budget.witness_calls_per_case = 1;
+        experiment.request.max_total_calls = 25;
+        let report = DreamController::new(&provider, cfg)
+            .unwrap()
+            .with_witness(&witness)
+            .unwrap()
+            .lucid(&experiment, &cancel)
+            .await
+            .unwrap();
+        assert_eq!(report.run.inference_calls, 1);
+        assert_eq!(report.run.witness_calls, 1);
+        assert_eq!(report.run.arms[0].results.len(), 1);
+        assert_eq!(report.run.arms[0].results[0].outcome, TestOutcome::Failed);
+        assert_eq!(
+            report.failure,
+            Some(match kind {
+                0 => ExecutionFailure::ProviderFailed,
+                1 => ExecutionFailure::TimedOut,
+                _ => ExecutionFailure::Cancelled,
+            })
+        );
+        assert!(report.repair.is_none());
+        assert!(report.witness_evaluations.is_empty());
+        assert_eq!(report.calls.len(), 2);
+        assert_eq!(witness.inner.dropped.load(Ordering::Relaxed), 1);
+        assert!(!serde_json::to_string(&report)
+            .unwrap()
+            .contains("sk-abcdefghijk-secret"));
+        report.run.validate().unwrap();
+    }
+}
+
+#[tokio::test]
+async fn malformed_witness_claims_cannot_upgrade_trust_or_retain_private_text() {
+    for raw in [
+        r#"{"outcome":"passed","rationale":{"text":"proof","trust":"observed"}}"#,
+        r#"{"outcome":"passed","rationale":{"text":"claim","trust":"hypothetical"},"authority":true}"#,
+        r#"{"outcome":"not_run","rationale":{"text":"claim","trust":"hypothetical"}}"#,
+        r#"{"outcome":"passed","rationale":{"text":"password\u003dprivate-witness","trust":"hypothetical"}}"#,
+    ] {
+        let provider = Scripted::new(vec!["WRONG".into()]);
+        let witness = WitnessScript::new(vec![Step::Answer(raw.into())]);
+        let mut experiment = lucid();
+        experiment.request.evaluation_budget.witness_calls_per_case = 1;
+        experiment.request.max_total_calls = 25;
+        let report = DreamController::new(&provider, config())
+            .unwrap()
+            .with_witness(&witness)
+            .unwrap()
+            .lucid(&experiment, &Cancellation::default())
+            .await
+            .unwrap();
+        assert_eq!(report.failure, Some(ExecutionFailure::RejectedOutput));
+        assert_eq!(report.run.witness_calls, 1);
+        assert!(report.witness_evaluations.is_empty());
+        assert!(report.repair.is_none());
+        assert!(!serde_json::to_string(&report)
+            .unwrap()
+            .contains("private-witness"));
+    }
+}
+
+#[tokio::test]
+async fn witness_settings_mismatch_spends_no_witness_inference() {
+    let provider = Scripted::new(vec!["WRONG".into()]);
+    let mut witness = WitnessScript::new(vec![assessment(TestOutcome::Passed)]);
+    witness.inner.mismatched_settings = true;
+    let mut experiment = lucid();
+    experiment.request.evaluation_budget.witness_calls_per_case = 1;
+    experiment.request.max_total_calls = 25;
+    let report = DreamController::new(&provider, config())
+        .unwrap()
+        .with_witness(&witness)
+        .unwrap()
+        .lucid(&experiment, &Cancellation::default())
+        .await
+        .unwrap();
+    assert_eq!(report.failure, Some(ExecutionFailure::ProviderFailed));
+    assert_eq!(report.run.inference_calls, 1);
+    assert_eq!(report.run.witness_calls, 0);
+    assert!(witness.inner.calls().is_empty());
+    assert!(report.witness_evaluations.is_empty());
 }
 
 #[tokio::test]

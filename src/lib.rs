@@ -32,7 +32,9 @@ pub mod decision_log;
 pub mod dream_engine;
 pub mod formal;
 pub mod harness;
+pub mod loop_detector;
 pub mod metered;
+pub mod research_witness;
 // v2: extracted to the sbh-normalize crate; re-exported so `crate::normalizer`
 // and `split_brain_harness::normalizer` keep resolving unchanged.
 pub use sbh_normalize as normalizer;

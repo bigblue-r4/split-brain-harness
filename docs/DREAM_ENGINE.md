@@ -169,7 +169,8 @@ semantic leakage. Benign text can still be rejected.
 An evaluator uses exact, case-sensitive, trimmed final-answer matching. With no
 oracle its outcome is Inconclusive. The last sample supplies the scored final
 answer; best-of-N is a separate diagnostic and cannot create an apparent repair.
-There is no model judge or Witness call.
+Exact-oracle scoring remains deterministic. M4 optionally records a separate
+research Witness assessment; it does not replace this score or affect repairs.
 
 A proposed repair requires that every repeated reproduction failed and exactly
 one intervention passed every repeated original-case outcome. Zero or multiple
@@ -201,8 +202,8 @@ are independently bounded. Caller-supplied limits can be smaller. Backend token
 settings remain a factory responsibility; byte limits enforce response admission,
 not the allocation behavior of a malicious provider.
 
-Witness budgets are rejected because Witness execution belongs to Milestone 4;
-its usage stays zero rather than pretending reserved Witness calls happened.
+Witness budgets require a configured research Witness in M4. They remain zero
+by default; configured providers with zero requested calls are never invoked.
 Both normal and generation calls charge the run total. Failed, cancelled, and
 timed-out inference invocations remain counted. Partial successful observations
 and call metadata are retained on failure; raw private/provider diagnostic text is
@@ -228,5 +229,5 @@ final-answer scoring, bounded call reservations, cancellation, timeout, provider
 failure, privacy admission, and disposal. Tests do not establish live-model benefit.
 
 Milestone 3 persistence and authenticated operator validation are described in
-[DREAM_MEMORY.md](DREAM_MEMORY.md). Witness/input approval and the advisory loop
-detector remain Milestone 4. Neither is implemented here.
+[DREAM_MEMORY.md](DREAM_MEMORY.md). Milestone 4's isolated research Witness and
+advisory Loop Detector are described in [DREAM_M4.md](DREAM_M4.md).
