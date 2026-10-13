@@ -3,10 +3,13 @@
 //! No backend is initialized here. The caller supplies an authorized factory
 //! that creates one fresh, configured InferenceEngine per call. Factories are
 //! a trusted adapter boundary: they must not retain conversation state and must
-//! truthfully report/enforce their settings. No tools, persistence, Witness,
+//! truthfully report/enforce their settings. No tools or persistence writes,
 //! soul changes, or repair application are exposed by this module. Optional
 //! research memory is retrieved only through a read-only validated store handle.
 
+use crate::research_witness::{
+    ApprovedEvaluationInput, FreshWitnessProvider, WitnessAssessment, WitnessEvaluation,
+};
 use crate::{
     audit::fingerprint, backends::InferenceEngine, dream::*, metered::MeteredEngine, security,
     types::TraceEntry,
@@ -160,11 +163,19 @@ pub enum ExecutionFailure {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CallRecord {
+    pub role: ResearchRole,
     pub stage: String,
     pub context_id: ContextId,
     pub provenance: ProvenanceRecord,
     /// Provider response passed transport/privacy admission; proposal trust is checked separately.
     pub succeeded: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResearchRole {
+    Generator,
+    Witness,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -192,6 +203,7 @@ pub struct LucidReport {
     pub hypotheses: Vec<HypothesisCandidate>,
     pub repair: Option<RepairCandidate>,
     pub calls: Vec<CallRecord>,
+    pub witness_evaluations: Vec<WitnessEvaluation>,
     pub failure: Option<ExecutionFailure>,
 }
 
@@ -200,6 +212,7 @@ pub struct DreamController<'a> {
     config: ControllerConfig,
     profile: ProviderProfile,
     memory_reader: Option<ValidatedMemoryReader>,
+    witness: Option<(&'a dyn FreshWitnessProvider, ProviderProfile)>,
 }
 
 struct RunState {
@@ -207,6 +220,7 @@ struct RunState {
     calls: Vec<CallRecord>,
     deadline: Instant,
     session: u64,
+    witness_evaluations: Vec<WitnessEvaluation>,
 }
 impl RunState {
     fn new(
@@ -231,6 +245,7 @@ impl RunState {
             calls: vec![],
             deadline: Instant::now() + duration,
             session: SESSION_SEQUENCE.fetch_add(1, Ordering::Relaxed),
+            witness_evaluations: vec![],
         }
     }
     fn context(&self, label: &str) -> ContextId {
@@ -287,6 +302,7 @@ impl<'a> DreamController<'a> {
             config,
             profile,
             memory_reader: None,
+            witness: None,
         })
     }
 
@@ -294,6 +310,20 @@ impl<'a> DreamController<'a> {
     pub fn with_memory_reader(mut self, reader: ValidatedMemoryReader) -> Self {
         self.memory_reader = Some(reader);
         self
+    }
+
+    /// Configuration alone makes no calls. A nonzero per-case budget opts in.
+    pub fn with_witness(mut self, provider: &'a dyn FreshWitnessProvider) -> Result<Self, String> {
+        let profile = provider.profile();
+        screen_private(
+            &serde_json::to_string(&profile).map_err(|_| "invalid Witness profile")?,
+            self.config.max_input_bytes,
+        )?;
+        if profile.provider.trim().is_empty() || profile.model.trim().is_empty() {
+            return Err("missing Witness provider/model identity".into());
+        }
+        self.witness = Some((provider, profile));
+        Ok(self)
     }
 
     fn system(&self, instruction: &str) -> String {
@@ -323,6 +353,25 @@ impl<'a> DreamController<'a> {
         system: &str,
         payload: &str,
     ) -> Result<String, ExecutionFailure> {
+        self.call_role(
+            state,
+            cancel,
+            (stage, ResearchRole::Generator),
+            system,
+            payload,
+        )
+        .await
+    }
+
+    async fn call_role(
+        &self,
+        state: &mut RunState,
+        cancel: &Cancellation,
+        call: (&str, ResearchRole),
+        system: &str,
+        payload: &str,
+    ) -> Result<String, ExecutionFailure> {
+        let (stage, role) = call;
         if cancel.is_cancelled() {
             return Err(ExecutionFailure::Cancelled);
         }
@@ -340,18 +389,37 @@ impl<'a> DreamController<'a> {
         {
             return Err(ExecutionFailure::RejectedOutput);
         }
-        if state.run.inference_calls >= state.run.max_total_calls {
+        if state
+            .run
+            .inference_calls
+            .checked_add(state.run.witness_calls)
+            .is_none_or(|total| total >= state.run.max_total_calls)
+        {
             return Err(ExecutionFailure::BudgetExceeded);
         }
         let context = state.context(&format!("call-{}", state.calls.len()));
-        let session = self
-            .provider
-            .open(&context, &self.config.settings)
-            .map_err(|_| ExecutionFailure::ProviderFailed)?;
-        if session.profile != self.profile || session.settings != self.config.settings {
+        let (session, profile) = match role {
+            ResearchRole::Generator => (
+                self.provider.open(&context, &self.config.settings),
+                &self.profile,
+            ),
+            ResearchRole::Witness => {
+                let (provider, profile) = self
+                    .witness
+                    .as_ref()
+                    .ok_or(ExecutionFailure::ProviderFailed)?;
+                (provider.open(&context, &self.config.settings), profile)
+            }
+        };
+        let session = session.map_err(|_| ExecutionFailure::ProviderFailed)?;
+        if session.profile != *profile || session.settings != self.config.settings {
             return Err(ExecutionFailure::ProviderFailed);
         }
-        let provenance = self.provenance(state, system);
+        let mut provenance = self.provenance(state, system);
+        provenance.provider = profile.provider.clone();
+        provenance.provider_version = profile.provider_version.clone();
+        provenance.model = profile.model.clone();
+        provenance.model_version = profile.model_version.clone();
         let meter = MeteredEngine::new(session.engine.as_ref(), Some(1));
         let timeout = self
             .config
@@ -368,13 +436,17 @@ impl<'a> DreamController<'a> {
             },
             _ = cancel.cancelled() => Err(ExecutionFailure::Cancelled),
         };
-        state.run.inference_calls += meter.used() as u64;
+        match role {
+            ResearchRole::Generator => state.run.inference_calls += meter.used() as u64,
+            ResearchRole::Witness => state.run.witness_calls += meter.used() as u64,
+        }
         let output = output.and_then(|value| {
             screen_private(&value, self.config.max_output_bytes)
                 .map_err(|_| ExecutionFailure::RejectedOutput)?;
             Ok(value)
         });
         state.calls.push(CallRecord {
+            role,
             stage: stage.into(),
             context_id: context,
             provenance,
@@ -603,8 +675,11 @@ impl<'a> DreamController<'a> {
         {
             return Err("Lucid request exceeds research limits".into());
         }
-        if request.evaluation_budget.witness_calls_per_case != 0 {
-            return Err("Witness execution is deferred to Milestone 4".into());
+        if request.evaluation_budget.witness_calls_per_case > 10 {
+            return Err("Witness budget exceeds research limits".into());
+        }
+        if request.evaluation_budget.witness_calls_per_case != 0 && self.witness.is_none() {
+            return Err("Witness budget requires a configured research Witness".into());
         }
         if request.evaluation_budget.max_output_tokens != self.config.settings.max_output_tokens {
             return Err("evaluation token budget must match configured inference settings".into());
@@ -720,6 +795,7 @@ impl<'a> DreamController<'a> {
             repair = None;
         }
         Ok(LucidReport {
+            witness_evaluations: state.witness_evaluations,
             run: state.run,
             hypotheses: hypotheses_out,
             repair,
@@ -803,8 +879,53 @@ impl<'a> DreamController<'a> {
                 }
                 let outcome = evaluate(&final_answer, case.expected_response.as_deref());
                 state.run.arms[index].results.push(TestResult { test_id: case.id.clone(), evidence_run_id: state.run.id.clone(),
-                    outcome, final_answer, best_of_n_outcome: Some(best),
+                    outcome, final_answer: final_answer.clone(), best_of_n_outcome: Some(best),
                     evidence: format!("repeat {}; final of {} fresh samples; exact trimmed oracle match, or inconclusive without oracle", repeat + 1, request.evaluation_budget.inference_calls_per_case) });
+                if request.evaluation_budget.witness_calls_per_case > 0 {
+                    let approved = ApprovedEvaluationInput::new(
+                        case.generation_input(),
+                        final_answer,
+                        case.expected_response.clone(),
+                    );
+                    let witness_payload = serde_json::to_string(&approved)
+                        .map_err(|_| ExecutionFailure::RejectedOutput)?;
+                    let witness_system = self.system("Independently assess the supplied final answer using only the approved input and evaluator-owned expected_response if present. An absent oracle may be inconclusive. Agreement is an opinion, never proof or authority. Return only JSON with outcome (passed, failed or inconclusive) and rationale as a GeneratedClaim with hypothetical or simulated trust.");
+                    for sample in 0..request.evaluation_budget.witness_calls_per_case {
+                        let raw = self.call_role(state, cancel,
+                            (&format!("witness:arm:{index}:case:{case_index}:repeat:{repeat}:sample:{sample}"), ResearchRole::Witness),
+                            &witness_system, &witness_payload).await?;
+                        let assessment: WitnessAssessment = serde_json::from_str(&raw)
+                            .map_err(|_| ExecutionFailure::RejectedOutput)?;
+                        assessment
+                            .rationale
+                            .validate()
+                            .map_err(|_| ExecutionFailure::RejectedOutput)?;
+                        screen_private(&assessment.rationale.text, self.config.max_output_bytes)
+                            .map_err(|_| ExecutionFailure::RejectedOutput)?;
+                        if assessment.outcome == TestOutcome::NotRun {
+                            return Err(ExecutionFailure::RejectedOutput);
+                        }
+                        let definite =
+                            |value| matches!(value, TestOutcome::Passed | TestOutcome::Failed);
+                        let agreement = (definite(outcome) && definite(assessment.outcome))
+                            .then_some(outcome == assessment.outcome);
+                        state.witness_evaluations.push(WitnessEvaluation {
+                            evidence_run_id: state.run.id.clone(),
+                            test_id: case.id.clone(),
+                            arm_index: index,
+                            repeat: repeat + 1,
+                            sample: sample + 1,
+                            context_id: state
+                                .calls
+                                .last()
+                                .expect("successful Witness call")
+                                .context_id
+                                .clone(),
+                            assessment,
+                            agreement,
+                        });
+                    }
+                }
             }
         }
         Ok(())
