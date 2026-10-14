@@ -205,6 +205,165 @@ fn assessment(outcome: TestOutcome) -> Step {
         .unwrap(),
     )
 }
+#[tokio::test]
+async fn distinct_seeds_are_reproducible_unique_and_recorded_for_all_roles() {
+    let mut request = lucid();
+    request.request.evaluation_budget.witness_calls_per_case = 1;
+    request.request.max_total_calls = 25;
+    let run = || async {
+        let provider = Scripted::new(lucid_script(false));
+        let witness =
+            WitnessScript::new((0..12).map(|_| assessment(TestOutcome::Failed)).collect());
+        let report = DreamController::new(&provider, config())
+            .unwrap()
+            .with_seed_policy(SeedPolicy::DistinctPerCall)
+            .unwrap()
+            .with_witness(&witness)
+            .unwrap()
+            .lucid(&request, &Cancellation::default())
+            .await
+            .unwrap();
+        for call in provider.calls().into_iter().chain(witness.inner.calls()) {
+            assert_eq!(
+                report
+                    .calls
+                    .iter()
+                    .find(|r| r.context_id == call.context)
+                    .unwrap()
+                    .provenance
+                    .seed,
+                call.settings.seed
+            );
+        }
+        assert!(report.run.arms.iter().all(|a| a.provenance.seed.is_none()));
+        report
+            .calls
+            .iter()
+            .map(|c| c.provenance.seed.unwrap())
+            .collect::<Vec<_>>()
+    };
+    let seeds = run().await;
+    assert_eq!(seeds.iter().collect::<HashSet<_>>().len(), 25);
+    assert!(seeds.iter().all(|s| *s <= i64::MAX as u64));
+    assert_eq!(seeds, run().await);
+    let provider = Scripted::new(vec![]);
+    let mut cfg = config();
+    cfg.settings.seed = None;
+    assert!(DreamController::new(&provider, cfg)
+        .unwrap()
+        .with_seed_policy(SeedPolicy::DistinctPerCall)
+        .is_err());
+}
+#[tokio::test]
+async fn derived_seed_tokens_and_profile_mismatches_are_still_rejected() {
+    struct Tamper {
+        inner: Scripted,
+        field: u8,
+    }
+    impl FreshContextProvider for Tamper {
+        fn profile(&self) -> ProviderProfile {
+            self.inner.profile()
+        }
+        fn open(
+            &self,
+            context: &ContextId,
+            settings: &InferenceSettings,
+        ) -> Result<EngineSession, String> {
+            let mut session = self.inner.open(context, settings)?;
+            match self.field {
+                0 => session.settings.seed = Some(0),
+                1 => session.settings.max_output_tokens += 1,
+                2 => session.profile.model = "different".into(),
+                _ => session.settings.temperature += 0.1,
+            }
+            Ok(session)
+        }
+    }
+    for field in 0..4 {
+        let provider = Tamper {
+            inner: Scripted::new(vec![generated("unused")]),
+            field,
+        };
+        let report = DreamController::new(&provider, config())
+            .unwrap()
+            .with_seed_policy(SeedPolicy::DistinctPerCall)
+            .unwrap()
+            .dream(&dream(), &Cancellation::default())
+            .await
+            .unwrap();
+        assert_eq!(report.failure, Some(ExecutionFailure::ProviderFailed));
+        assert_eq!(report.run.inference_calls, 0);
+        assert!(provider.inner.calls().is_empty());
+    }
+}
+#[tokio::test]
+async fn scorer_hook_changes_only_opted_in_evaluation_and_records_its_identity() {
+    struct Final;
+    impl AnswerScorer for Final {
+        fn id(&self) -> &'static str {
+            "test_final_integer"
+        }
+        fn score(
+            &self,
+            answer: &str,
+            oracle: Option<&str>,
+            _: &ContextId,
+        ) -> Result<TestOutcome, ExecutionFailure> {
+            Ok(
+                if split_brain_harness::research_ollama::parse_final_integer(answer)
+                    == oracle.and_then(|s| s.parse().ok())
+                {
+                    TestOutcome::Passed
+                } else {
+                    TestOutcome::Failed
+                },
+            )
+        }
+    }
+    let mut request = lucid();
+    request.request.failure.expected_response = Some("323".into());
+    request.request.regression_cases.clear();
+    request.request.max_total_calls = 7;
+    let script = || {
+        vec![
+            "FINAL: 0".into(),
+            "FINAL: 0".into(),
+            "FINAL: 0".into(),
+            "FINAL: 0".into(),
+            "work\nFINAL: 323".into(),
+            "work\nFINAL: 323".into(),
+        ]
+    };
+    let provider = Scripted::new(script());
+    let exact = DreamController::new(&provider, config())
+        .unwrap()
+        .lucid(&request, &Cancellation::default())
+        .await
+        .unwrap();
+    assert!(exact.repair.is_none());
+    assert!(exact.run.arms[2]
+        .results
+        .iter()
+        .all(|r| r.outcome == TestOutcome::Failed));
+    let mut steps = script();
+    steps.push(generated("proposed repair"));
+    let provider = Scripted::new(steps);
+    let report = DreamController::new(&provider, config())
+        .unwrap()
+        .with_scorer(&Final)
+        .lucid(&request, &Cancellation::default())
+        .await
+        .unwrap();
+    assert!(report.repair.is_some());
+    assert!(report.run.arms[2]
+        .results
+        .iter()
+        .all(|r| r.outcome == TestOutcome::Passed && r.evidence.contains("test_final_integer")));
+    assert_eq!(
+        report.run.arms[2].results[0].final_answer,
+        "work\nFINAL: 323"
+    );
+}
 fn source(task: &str, run: &str) -> ProvenanceRecord {
     ProvenanceRecord {
         source_run_id: run.to_string().try_into().unwrap(),
@@ -1109,9 +1268,57 @@ async fn generated_hypothesis_and_repair_cannot_contain_any_known_oracle() {
         .lucid(&lucid(), &Cancellation::default())
         .await
         .unwrap();
-    assert_eq!(report.failure, Some(ExecutionFailure::RejectedOutput));
+    assert_eq!(report.failure, None);
+    assert_eq!(report.run.status, RunStatus::Completed);
     assert_eq!(report.run.inference_calls, 13);
     assert!(report.repair.is_none());
+}
+
+#[tokio::test]
+async fn rejected_repair_content_preserves_measurements_but_transport_failure_aborts() {
+    for step in [
+        Step::Answer("not GeneratedClaim JSON".into()),
+        generated("Repair by returning ORIG_OK"),
+        Step::Answer("password=private-repair".into()),
+        Step::Error,
+    ] {
+        let transport = matches!(step, Step::Error);
+        let mut script = lucid_script(false);
+        *script.last_mut().unwrap() = step;
+        let provider = Scripted::new(script);
+        let report = DreamController::new(&provider, config())
+            .unwrap()
+            .lucid(&lucid(), &Cancellation::default())
+            .await
+            .unwrap();
+        assert_eq!(report.run.inference_calls, 13);
+        assert!(report.repair.is_none());
+        assert_eq!(
+            report
+                .run
+                .arms
+                .iter()
+                .map(|a| a.results.len())
+                .sum::<usize>(),
+            12
+        );
+        if transport {
+            assert_eq!(report.failure, Some(ExecutionFailure::ProviderFailed));
+            assert_eq!(report.run.status, RunStatus::Failed);
+        } else {
+            assert_eq!(report.failure, None);
+            assert_eq!(report.run.status, RunStatus::Completed);
+            assert!(report
+                .run
+                .trace
+                .iter()
+                .any(|t| t.stage == "lucid:repair-admission"
+                    && t.claim.contains("content_admission")));
+        }
+        assert!(!serde_json::to_string(&report)
+            .unwrap()
+            .contains("private-repair"));
+    }
 }
 
 #[tokio::test]
