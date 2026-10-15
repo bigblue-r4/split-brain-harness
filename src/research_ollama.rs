@@ -1,4 +1,5 @@
 //! Research-only localhost Ollama transport; not the production/benchmark engine.
+pub mod diagnostic;
 use crate::{
     audit::iso_now,
     backends::InferenceEngine,
