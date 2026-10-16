@@ -1014,7 +1014,10 @@ fn distinct_call_seed(run: &RunId, base: u64, ordinal: u64) -> u64 {
     bytes.extend_from_slice(run.as_str().as_bytes());
     bytes.extend_from_slice(&base.to_le_bytes());
     let run_base = u64::from_str_radix(&fingerprint(&bytes), 16).expect("FNV hexadecimal");
-    run_base.wrapping_add(ordinal) & i64::MAX as u64
+    // Addition modulo 2^32 is injective for any sequence shorter than 2^32
+    // calls (research admission caps runs at MAX_TOTAL_CALLS). Values survive
+    // both JSON float64 decoding and the llamarunner uint32 conversion exactly.
+    run_base.wrapping_add(ordinal) & u64::from(u32::MAX)
 }
 fn evaluate(answer: &str, expected: Option<&str>) -> TestOutcome {
     match expected {
@@ -1088,6 +1091,50 @@ fn screen_oracles(text: &str, oracles: &[&str]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn research_seeds_survive_float64_and_uint32_for_pilot_and_maximum_run() {
+        for base in [0, 20261013, u64::MAX] {
+            let run: RunId = "future-research-run".to_string().try_into().unwrap();
+            let seeds: Vec<_> = (0..MAX_TOTAL_CALLS)
+                .map(|index| distinct_call_seed(&run, base, index))
+                .collect();
+            assert_eq!(
+                seeds.iter().collect::<std::collections::HashSet<_>>().len(),
+                MAX_TOTAL_CALLS as usize
+            );
+            // Includes 224 pilot-sized calls plus an extra repair reservation.
+            assert_eq!(
+                seeds[..225]
+                    .iter()
+                    .collect::<std::collections::HashSet<_>>()
+                    .len(),
+                225
+            );
+            for seed in seeds {
+                assert!(seed < (1u64 << 32));
+                assert_eq!((seed as f64) as u64, seed);
+                assert_eq!(u64::from(seed as u32), seed);
+            }
+            assert_eq!(
+                distinct_call_seed(&run, base, 0),
+                distinct_call_seed(&run, base, 0)
+            );
+            let start = distinct_call_seed(&run, base, 0);
+            let wrap = (1u64 << 32) - start;
+            let crossing: Vec<_> = (wrap.saturating_sub(2)..wrap + 3)
+                .map(|index| distinct_call_seed(&run, base, index))
+                .collect();
+            assert_eq!(
+                crossing
+                    .iter()
+                    .collect::<std::collections::HashSet<_>>()
+                    .len(),
+                crossing.len()
+            );
+            assert_eq!(distinct_call_seed(&run, base, wrap), 0);
+        }
+    }
 
     #[test]
     fn output_validation_rejects_structurally_invalid_run_before_completion() {
