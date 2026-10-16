@@ -334,8 +334,8 @@ fn body(
 ) -> Result<serde_json::Value, String> {
     let seed = settings
         .seed
-        .filter(|s| *s <= i64::MAX as u64)
-        .ok_or("signed per-call seed required")?;
+        .filter(|s| *s < (1u64 << 32))
+        .ok_or("per-call seed in 0..2^32 required")?;
     if !settings.temperature.is_finite()
         || !(0.0..=2.0).contains(&settings.temperature)
         || !(1..=8192).contains(&settings.max_output_tokens)
@@ -664,6 +664,13 @@ mod tests {
         assert!(super::body("m", &missing, "", "").is_err());
         missing.seed = Some(u64::MAX);
         assert!(super::body("m", &missing, "", "").is_err());
+        missing.seed = Some(1u64 << 32);
+        assert!(super::body("m", &missing, "", "").is_err());
+        missing.seed = Some(u64::from(u32::MAX));
+        assert_eq!(
+            super::body("m", &missing, "", "").unwrap()["options"]["seed"].as_u64(),
+            missing.seed
+        );
     }
     #[test]
     fn final_parser_is_strict_and_supports_working() {
@@ -821,6 +828,7 @@ mod tests {
         let telemetry = provider.telemetry().snapshot().unwrap();
         let seeds: std::collections::HashSet<_> = telemetry.iter().map(|t| t.seed).collect();
         assert_eq!(seeds.len(), 15);
+        assert!(seeds.iter().all(|seed| *seed < (1u64 << 32)));
         for (index, request) in requests[2..].iter().enumerate() {
             let body: serde_json::Value =
                 serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
@@ -859,6 +867,15 @@ mod tests {
         let provider = ResearchOllamaProvider::connect(&url, "llama3.2:3b", Arc::new(Guard(false)))
             .await
             .unwrap();
+        let mut rejected = settings();
+        rejected.seed = Some(1u64 << 32);
+        assert!(provider
+            .open(&"oversized".to_string().try_into().unwrap(), &rejected)
+            .is_err());
+        rejected.seed = None;
+        assert!(provider
+            .open(&"missing-seed".to_string().try_into().unwrap(), &rejected)
+            .is_err());
         let session = provider
             .open(&"stopped".to_string().try_into().unwrap(), &settings())
             .unwrap();

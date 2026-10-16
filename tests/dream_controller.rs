@@ -244,7 +244,7 @@ async fn distinct_seeds_are_reproducible_unique_and_recorded_for_all_roles() {
     };
     let seeds = run().await;
     assert_eq!(seeds.iter().collect::<HashSet<_>>().len(), 25);
-    assert!(seeds.iter().all(|s| *s <= i64::MAX as u64));
+    assert!(seeds.iter().all(|s| *s < (1u64 << 32)));
     assert_eq!(seeds, run().await);
     let provider = Scripted::new(vec![]);
     let mut cfg = config();

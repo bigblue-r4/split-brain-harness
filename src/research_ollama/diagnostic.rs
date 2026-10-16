@@ -1,12 +1,12 @@
 //! Separate bounded diagnostic. Does not relax the registered provider's seeds.
 use super::{
-    body, bounded_json, client, endpoint, metadata, parse_final_integer, CoreTempGuard,
+    bounded_json, client, endpoint, metadata, parse_final_integer, CoreTempGuard,
     ResearchCallGuard, ThermalReading,
 };
 use crate::{
     audit::{fingerprint, iso_now},
     dream::ContextId,
-    dream_engine::{Cancellation, InferenceSettings, ProviderProfile},
+    dream_engine::{Cancellation, ProviderProfile},
     lucid_pilot::parse_registered,
 };
 use serde::Serialize;
@@ -61,21 +61,12 @@ pub fn request(
     system: &str,
     payload: &str,
 ) -> Result<serde_json::Value, String> {
-    let mut value = body(
-        model,
-        &InferenceSettings {
-            temperature: condition.temperature(),
-            seed: Some(condition.seed().unwrap_or(0)),
-            max_output_tokens: 256,
-        },
-        system,
-        payload,
-    )?;
-    if condition == Condition::C {
-        value["options"]
-            .as_object_mut()
-            .ok_or("invalid request options")?
-            .remove("seed");
+    // Frozen diagnostic deliberately probes omitted/high-bit seeds. Its fixed
+    // condition matrix is separate from the stricter future research provider.
+    let mut value = serde_json::json!({"model":model,"messages":[{"role":"system","content":system},{"role":"user","content":payload}],
+        "think":false,"stream":false,"options":{"temperature":condition.temperature(),"num_predict":256}});
+    if let Some(seed) = condition.seed() {
+        value["options"]["seed"] = seed.into();
     }
     Ok(value)
 }
@@ -401,7 +392,9 @@ pub async fn run(
 
 #[cfg(test)]
 mod tests {
+    use super::super::body;
     use super::*;
+    use crate::dream_engine::InferenceSettings;
     #[test]
     fn five_request_shapes_and_ten_call_order_are_exact() {
         for condition in [
