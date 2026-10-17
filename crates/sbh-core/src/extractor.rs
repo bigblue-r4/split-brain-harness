@@ -40,7 +40,7 @@ pub fn extract<T: DeserializeOwned>(raw: &str) -> Result<T> {
 // ---------------------------------------------------------------------------
 
 /// Remove all <think>...</think> blocks. Unclosed tags drop the remainder.
-fn strip_think_blocks(s: &str) -> String {
+pub(crate) fn strip_think_blocks(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
     while let Some(open) = rest.find("<think>") {
