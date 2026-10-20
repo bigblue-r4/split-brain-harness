@@ -139,7 +139,7 @@ impl WatchSlice {
 // ---------------------------------------------------------------------------
 
 /// A verified finding. Holds a span into the slice, never text the model wrote.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Finding {
     pub code: AnomalyCode,
     pub entry: usize,
@@ -158,7 +158,7 @@ impl Finding {
 
 /// Why a finding the model returned was not kept. Rejections are signal: a
 /// watcher that keeps citing text that isn't there is itself degrading.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "reason", rename_all = "snake_case")]
 pub enum Rejection {
     EntryOutOfRange { entry: usize },
@@ -169,7 +169,7 @@ pub enum Rejection {
     OverLimit,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WitnessReport {
     pub verdict: WatchVerdict,
     pub findings: Vec<Finding>,
@@ -177,8 +177,18 @@ pub struct WitnessReport {
 }
 
 impl WitnessReport {
-    /// NOMINAL alongside verified findings is self-contradictory. Callers should
-    /// treat it as at least DEGRADED rather than trust either half.
+    /// Operational caution is computed from the verified report, never model prose.
+    pub fn effective_verdict(&self) -> WatchVerdict {
+        if self.verdict == WatchVerdict::Halt {
+            WatchVerdict::Halt
+        } else if self.verdict_conflicts() || !self.rejected.is_empty() {
+            WatchVerdict::Degraded
+        } else {
+            self.verdict
+        }
+    }
+
+    /// NOMINAL alongside verified findings is self-contradictory.
     pub fn verdict_conflicts(&self) -> bool {
         self.verdict == WatchVerdict::Nominal && !self.findings.is_empty()
     }
@@ -415,6 +425,28 @@ mod tests {
         assert!(parse_report(raw, &slice()).unwrap().verdict_conflicts());
         let raw = r#"{"verdict":"NOMINAL","findings":[]}"#;
         assert!(!parse_report(raw, &slice()).unwrap().verdict_conflicts());
+    }
+
+    #[test]
+    fn effective_verdict_never_clears_conflicts_rejections_or_halt() {
+        for verdict in ["NOMINAL", "DEGRADED", "HALT"] {
+            for quote in ["xfail", "absent"] {
+                let raw = format!(
+                    r#"{{"verdict":"{verdict}","findings":[{{"code":"CHECK_DISABLED","entry":0,"quote":"{quote}"}}]}}"#
+                );
+                let r = parse_report(&raw, &slice()).unwrap();
+                assert_eq!(
+                    r.effective_verdict(),
+                    if verdict == "HALT" {
+                        WatchVerdict::Halt
+                    } else {
+                        WatchVerdict::Degraded
+                    }
+                );
+            }
+        }
+        let r = parse_report(r#"{"verdict":"NOMINAL","findings":[]}"#, &slice()).unwrap();
+        assert_eq!(r.effective_verdict(), WatchVerdict::Nominal);
     }
 
     #[test]

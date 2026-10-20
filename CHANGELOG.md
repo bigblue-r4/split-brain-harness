@@ -6,6 +6,23 @@ All notable changes to split-brain-harness are documented here.
 
 ## [Unreleased]
 
+### Breaking changes
+
+- Watchers now accept only Fair Witness JSON (`NOMINAL|DEGRADED|HALT` and
+  closed-code findings with exact quotes). Legacy reasoning, argument, confidence,
+  outcome, and rationale fields in model replies are rejected.
+- `AdvocateReport` replaces `verdict`, `confidence`, and `argument` with `witness`
+  (a verified report with enum verdict, byte-span findings, and rejection codes).
+  `dissented` and `gate_reason` remain. HALT escalates without a confidence threshold.
+- `DisagreementScore.reconcile_verdict` changes from a summary string to a verified
+  report object. Reconcile traces serialize the report as evidence, with no prose
+  reasoning field.
+- Research `WitnessAssessment.rationale` is replaced by `witness`; `outcome` is
+  derived by the controller from the effective verdict and oracle availability.
+  Watchers always use the embedded Fair Witness identity. Generator soul settings
+  no longer configure the advocate or research Witness. Decision-log fields and
+  deterministic session escalation are unchanged.
+
 ---
 
 ## [1.6.0] — 2026-10-02

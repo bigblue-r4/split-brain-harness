@@ -37,17 +37,40 @@ Chris's three fixes (2026-10-16):
   - `user_payload` carries only the slice, as a JSON array, so an entry cannot forge the
     boundary of another.
 
-Nothing calls this yet, and no behaviour changes.
+## Watcher wiring (PR B)
+
+- The verifier reconcile adjudicator, advocate, and research Witness now call the
+  fixed Fair Witness system prompt and strict parser. Generator soul settings,
+  including the research `base_system_prompt`, cannot override their identity.
+- Each call builds a new JSON slice. Adjudicator entries are original input,
+  serialized proposer telemetry, and serialized deterministic flags. Advocate
+  entries are original input and serialized telemetry. Research entries are
+  serialized generation input, final answer, and serialized optional oracle.
+  Reports store only enum values, verified byte spans, and rejection codes.
+- Prompt-capture tests inspect every system and user message across successive
+  calls, runs, and samples; prior answers, flags, reports, and generator identity
+  do not enter a later call. Providers must still honor their stateless adapter
+  contract; prompt tests cannot inspect a remote provider's hidden state.
+- Only an effective `HALT` escalates the advocate or reconcile gate. `NOMINAL`
+  never clears existing flags. Conflicting nominal findings or rejected quotes
+  make a report at least `DEGRADED`; a reported `HALT` remains `HALT`. Malformed
+  reports follow the existing advisory failure path and cannot lower caution.
+  Advocate dissent sets verification confidence to zero without accepting a
+  model-supplied confidence value.
+- Research outcome is a controller projection: `HALT` → failed, `DEGRADED` →
+  inconclusive, `NOMINAL` → passed when an oracle exists (otherwise inconclusive).
+  This remains an independent opinion, not exact scoring or repair authority.
+- The `serve` session tracker retains numeric turn summaries only. Existing
+  three- and five-turn slow-boil regression tests still check escalation.
+- CLI/serve consumers and HTML rendering carry structured reports without
+  replaying quotes as watcher prose. Decision-log fields are unchanged.
+  Public JSON shape changes are listed in CHANGELOG Unreleased.
+- The refinement arbiter's `ArbiterDecision.reasoning` is a separate generator
+  refinement decision, not the verifier reconcile adjudicator; it is outside
+  these three watcher paths.
 
 ## Next
 
-- **PR B:** convert the watchers that currently write free text to this schema, and add
-  tests that capture every prompt to prove call N carries nothing from call N−1:
-  - verifier adjudicator: `reasoning`
-  - advocate: `argument`
-  - research Witness: `rationale`, plus its use of the generator's `base_system_prompt`
-- **Slow-boil detection stays in deterministic code.** The `serve` session tracker keeps
-  numbers, never LLM context, so fix 2 does not cost multi-turn escalation detection.
 - **kiss-protocol:** record `watch_codes` in the decision log and reject codes outside
   the closed list on ingest.
 - **Measure** the old watchers against the new ones on the scenario catalog's

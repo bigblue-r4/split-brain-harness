@@ -457,18 +457,13 @@ impl FormalReport {
 
 /// The advocate's adversarial reading of the input. Present on `HarnessResult`
 /// only when the advocate stage actually ran (gate passed and a call was made).
-/// By design the advocate can only ever *raise* caution — a `Benign` verdict is
+/// By design the advocate can only ever *raise* caution — a `NOMINAL` verdict is
 /// informational and never clears a flag or lifts the gate.
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 pub struct AdvocateReport {
-    /// "attack" | "benign" | "unsure" — the advocate's verdict.
-    pub verdict: String,
-    /// Advocate's confidence in its verdict, 0.0–1.0.
-    pub confidence: f32,
-    /// One-sentence strongest argument that the input is manipulative.
-    pub argument: String,
-    /// True when the advocate dissents with enough confidence to escalate the
-    /// gate (verdict "attack" above the dissent threshold).
+    /// Verified closed-schema observation; spans refer to this call's slice.
+    pub witness: crate::witness_schema::WitnessReport,
+    /// True when the effective verdict is HALT; no model confidence is accepted.
     pub dissented: bool,
     /// Why the advocate ran — the gate signal(s) that triggered it.
     pub gate_reason: Vec<String>,
@@ -515,9 +510,9 @@ pub struct DisagreementScore {
     /// Confidence derived from disagreement structure (replaces flat flag-count penalty).
     /// Uses density and fingerprint match instead of a simple per-flag discount.
     pub adjusted_confidence: f32,
-    /// Present when Reconcile mode ran — summary of the adjudicator's verdict.
+    /// Present when Reconcile mode ran — verified report for this call's slice.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub reconcile_verdict: Option<String>,
+    pub reconcile_verdict: Option<crate::witness_schema::WitnessReport>,
 }
 
 /// Result of the verification stage.

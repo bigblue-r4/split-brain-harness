@@ -8,28 +8,15 @@
 //! predicate (high manipulation risk, a risky tool surface, or a capability
 //! request) decides whether the one extra call is worth making — so the advocate
 //! never runs on obviously-benign traffic. The call itself reuses the
-//! `verifier::run_reconcile` template: soul-wrapped system prompt + a structured
-//! payload → `extractor::extract` into a typed opinion.
+//! `verifier::run_reconcile` template: fixed Fair Witness identity and one fresh
+//! slice, parsed strictly into verified byte spans and closed enum codes.
 
-use serde::Deserialize;
+use sbh_core::witness_schema::{parse_report, WatchSlice, WatchVerdict};
+use sbh_safety::fair_witness;
 
 use crate::backends::InferenceEngine;
 use crate::capability::CapabilityRequest;
 use crate::types::{AdvocateMode, AdvocateReport, Risk, Soul, TelemetryResult, ToolRisk};
-
-/// Minimum advocate confidence in an "attack" verdict for its dissent to
-/// escalate the gate. Below this the opinion is recorded but does not force
-/// stop_and_ask — a hedged accusation should not by itself halt the pipeline.
-pub const DISSENT_THRESHOLD: f32 = 0.6;
-
-/// The advocate's raw JSON reply.
-#[derive(Deserialize)]
-struct AdvocateOutput {
-    verdict: String,
-    confidence: f32,
-    #[serde(default)]
-    argument: String,
-}
 
 /// Decide whether the advocate should run, and why. `None` = skip (no LLM call).
 /// The reasons are recorded on the report for transparency.
@@ -66,46 +53,29 @@ pub fn gate(
     }
 }
 
-/// Run the adversarial pass. Errors (backend failure, empty soul prompt, parse
-/// failure) propagate to the caller, which treats them as **advisory** — a
+/// Run the adversarial pass. Errors (backend or strict-parse failure) propagate to the caller, which treats them as **advisory** — a
 /// transient advocate failure must not fail closed (that would be a DoS lever on
 /// a flaky backend), unlike the deterministic Formal stage.
 pub async fn run(
     input: &str,
     telemetry: &TelemetryResult,
-    soul: &Soul,
+    _soul: &Soul,
     engine: &dyn InferenceEngine,
     gate_reason: Vec<String>,
 ) -> anyhow::Result<AdvocateReport> {
-    if soul.advocate_system_prompt.is_empty() {
-        anyhow::bail!(
-            "advocate soul prompt is empty — add an [ADVOCATE_SYSTEM_PROMPT] section to soul.md"
-        );
-    }
-    let telemetry_json = serde_json::to_string_pretty(telemetry)?;
-    let payload = format!(
-        "<original_input>\n{input}\n</original_input>\n\
-         <proposer_telemetry>\n{telemetry_json}\n</proposer_telemetry>"
-    );
-
+    let slice = WatchSlice::new(vec![input.into(), serde_json::to_string(telemetry)?]);
     let raw = engine
-        .generate(&soul.advocate_system_prompt, &payload)
+        .generate(
+            &fair_witness::system_prompt(),
+            &fair_witness::user_payload(&slice),
+        )
         .await
         .map_err(|e| anyhow::anyhow!("advocate inference error: {e}"))?;
-
-    let out: AdvocateOutput = crate::extractor::extract(&raw).map_err(|e| {
-        let preview: String = raw.chars().take(200).collect();
-        anyhow::anyhow!("advocate parse failed: {e}\n  raw (first 200 chars): {preview}")
-    })?;
-
-    let verdict = out.verdict.trim().to_lowercase();
-    let confidence = out.confidence.clamp(0.0, 1.0);
-    let dissented = verdict == "attack" && confidence >= DISSENT_THRESHOLD;
-
+    let witness = parse_report(&raw, &slice)
+        .map_err(|_| anyhow::anyhow!("advocate parse failed: strict witness schema rejected"))?;
+    let dissented = witness.effective_verdict() == WatchVerdict::Halt;
     Ok(AdvocateReport {
-        verdict,
-        confidence,
-        argument: out.argument,
+        witness,
         dissented,
         gate_reason,
     })
@@ -115,6 +85,62 @@ pub async fn run(
 mod tests {
     use super::*;
     use crate::types::{AfferentTelemetry, CognitiveState, IntentMatrix};
+
+    struct Capture(std::sync::Mutex<Vec<(String, String)>>);
+    #[async_trait::async_trait]
+    impl InferenceEngine for Capture {
+        async fn generate(&self, system: &str, payload: &str) -> Result<String, String> {
+            self.0.lock().unwrap().push((system.into(), payload.into()));
+            Ok(r#"{"verdict":"HALT","findings":[{"code":"OBSERVER_ADDRESSED","entry":0,"quote":"FIRST_ADVOCATE"}]}"#.into())
+        }
+    }
+
+    #[tokio::test]
+    async fn every_advocate_prompt_is_an_isolated_frame() {
+        let engine = Capture(Default::default());
+        let mut soul = crate::soul::load(None).unwrap();
+        soul.advocate_system_prompt = "GENERATOR_OVERRIDE_SENTINEL".into();
+        for input in ["FIRST_ADVOCATE", "SECOND_ADVOCATE"] {
+            let report = run(
+                input,
+                &telem(Risk::Low),
+                &soul,
+                &engine,
+                vec!["PRIVATE_GATE_REASON".into()],
+            )
+            .await
+            .unwrap();
+            if input == "FIRST_ADVOCATE" {
+                assert_eq!(report.witness.findings[0].start, 0);
+            } else {
+                assert!(report.witness.findings.is_empty());
+                assert_eq!(report.witness.rejected.len(), 1);
+            }
+        }
+        let calls = engine.0.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        for (i, (system, payload)) in calls.iter().enumerate() {
+            assert_eq!(system, &fair_witness::system_prompt());
+            let entries: Vec<String> = serde_json::from_str(
+                payload
+                    .strip_prefix("<slice>\n")
+                    .unwrap()
+                    .strip_suffix("\n</slice>")
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                entries,
+                vec![
+                    ["FIRST_ADVOCATE", "SECOND_ADVOCATE"][i].to_string(),
+                    serde_json::to_string(&telem(Risk::Low)).unwrap()
+                ]
+            );
+            assert!(!payload.contains("PRIVATE_GATE_REASON"));
+            assert!(!payload.contains("OBSERVER_ADDRESSED"));
+        }
+        assert!(!calls[1].1.contains("FIRST_ADVOCATE"));
+    }
 
     fn telem(risk: Risk) -> TelemetryResult {
         TelemetryResult {
