@@ -11,3 +11,4 @@ pub mod dream;
 pub mod extractor;
 pub mod input_validation;
 pub mod types;
+pub mod witness_schema;
