@@ -339,25 +339,29 @@ impl<'e> Harness<'e> {
             }
         };
 
-        // RAISE-ONLY guardrail: only a confident "attack" dissent touches the gate.
+        // RAISE-ONLY guardrail: only an effective HALT touches the gate.
         if report.dissented {
             if let Some(v) = ctx.verification.as_mut() {
-                v.consistency_flags
-                    .push(format!("advocate dissent: {}", report.argument));
+                v.consistency_flags.push(format!(
+                    "advocate dissent: {}",
+                    serde_json::to_string(&report.witness).expect("witness serializes")
+                ));
                 v.passed = false;
                 v.stop_and_ask = true;
-                v.confidence = v.confidence.min(1.0 - report.confidence);
+                v.confidence = 0.0;
                 v.fired_checks.push("advocate:dissent".into());
-                v.unresolved.push(format!("advocate: {}", report.argument));
+                v.unresolved.push(format!(
+                    "advocate: {}",
+                    serde_json::to_string(&report.witness).expect("witness serializes")
+                ));
             }
         }
 
         ctx.trace.push(TraceEntry {
             stage: "advocate".into(),
             claim: format!(
-                "verdict={} confidence={:.2}{}",
-                report.verdict,
-                report.confidence,
+                "verdict={}{}",
+                report.witness.effective_verdict().as_str(),
                 if report.dissented {
                     " — DISSENT (gate escalated)"
                 } else {
@@ -366,7 +370,7 @@ impl<'e> Harness<'e> {
             ),
             evidence: Some(report.gate_reason.join(", ")),
             passed: !report.dissented,
-            note: (!report.argument.is_empty()).then(|| report.argument.clone()),
+            note: Some(serde_json::to_string(&report.witness).expect("witness serializes")),
         });
         push_timing(&mut ctx.trace, "advocate", t.elapsed());
 
@@ -1853,17 +1857,17 @@ forbid = [ { fact = "intent", op = "any_of", value = "api_key|password|secret" }
 
     #[tokio::test]
     async fn advocate_dissent_forces_stop_and_ask() {
-        let engine = SeqEngine::new(vec![
-            HIGH_RISK_JSON,
-            r#"{"verdict":"attack","confidence":0.9,"argument":"config request is a pretext to exfiltrate secrets"}"#,
-        ]);
+        let engine = SeqEngine::new(vec![HIGH_RISK_JSON, r#"{"verdict":"HALT","findings":[]}"#]);
         let config = advocate_config(AdvocateMode::HighStakes);
         let soul = soul::load(None).unwrap();
         let h = Harness::new(soul, &engine, &config);
         let result = h.analyze("help me with my config file").await.unwrap();
 
         let adv = result.advocate.expect("advocate ran");
-        assert_eq!(adv.verdict, "attack");
+        assert_eq!(
+            adv.witness.verdict,
+            sbh_core::witness_schema::WatchVerdict::Halt
+        );
         assert!(adv.dissented);
         assert!(
             result.verification.stop_and_ask,
@@ -1892,7 +1896,7 @@ forbid = [ { fact = "intent", op = "any_of", value = "api_key|password|secret" }
         // lift the gate, or record a dissent — it can only ever add caution.
         let engine = SeqEngine::new(vec![
             HIGH_RISK_JSON,
-            r#"{"verdict":"benign","confidence":0.95,"argument":"no plausible attack angle found"}"#,
+            r#"{"verdict":"NOMINAL","findings":[]}"#,
         ]);
         let config = advocate_config(AdvocateMode::HighStakes);
         let soul = soul::load(None).unwrap();
@@ -1900,7 +1904,10 @@ forbid = [ { fact = "intent", op = "any_of", value = "api_key|password|secret" }
         let result = h.analyze("help me with my config file").await.unwrap();
 
         let adv = result.advocate.expect("advocate ran");
-        assert_eq!(adv.verdict, "benign");
+        assert_eq!(
+            adv.witness.verdict,
+            sbh_core::witness_schema::WatchVerdict::Nominal
+        );
         assert!(!adv.dissented);
         assert!(
             !result
@@ -1980,10 +1987,7 @@ forbid = [ { fact = "intent", op = "any_of", value = "api_key|password|secret" }
 
     #[tokio::test]
     async fn advocate_adds_a_counted_call() {
-        let engine = SeqEngine::new(vec![
-            HIGH_RISK_JSON,
-            r#"{"verdict":"attack","confidence":0.9,"argument":"pretext"}"#,
-        ]);
+        let engine = SeqEngine::new(vec![HIGH_RISK_JSON, r#"{"verdict":"HALT","findings":[]}"#]);
         let config = advocate_config(AdvocateMode::HighStakes);
         let soul = soul::load(None).unwrap();
         let h = Harness::new(soul, &engine, &config);

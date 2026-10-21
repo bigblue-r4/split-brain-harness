@@ -963,24 +963,33 @@ impl<'a> DreamController<'a> {
                         final_answer,
                         case.expected_response.clone(),
                     );
-                    let witness_payload = serde_json::to_string(&approved)
-                        .map_err(|_| ExecutionFailure::RejectedOutput)?;
-                    let witness_system = self.system("Independently assess the supplied final answer using only the approved input and evaluator-owned expected_response if present. An absent oracle may be inconclusive. Agreement is an opinion, never proof or authority. Return only JSON with outcome (passed, failed or inconclusive) and rationale as a GeneratedClaim with hypothetical or simulated trust.");
+                    let slice = sbh_core::witness_schema::WatchSlice::new(vec![
+                        serde_json::to_string(approved.generation_input())
+                            .map_err(|_| ExecutionFailure::RejectedOutput)?,
+                        approved.final_answer().into(),
+                        serde_json::to_string(&approved.expected_response())
+                            .map_err(|_| ExecutionFailure::RejectedOutput)?,
+                    ]);
+                    let witness_payload = sbh_safety::fair_witness::user_payload(&slice);
+                    let witness_system = sbh_safety::fair_witness::system_prompt();
                     for sample in 0..request.evaluation_budget.witness_calls_per_case {
                         let raw = self.call_role(state, cancel,
                             (&format!("witness:arm:{index}:case:{case_index}:repeat:{repeat}:sample:{sample}"), ResearchRole::Witness),
                             &witness_system, &witness_payload).await?;
-                        let assessment: WitnessAssessment = serde_json::from_str(&raw)
+                        let witness = sbh_core::witness_schema::parse_report(&raw, &slice)
                             .map_err(|_| ExecutionFailure::RejectedOutput)?;
-                        assessment
-                            .rationale
-                            .validate()
-                            .map_err(|_| ExecutionFailure::RejectedOutput)?;
-                        screen_private(&assessment.rationale.text, self.config.max_output_bytes)
-                            .map_err(|_| ExecutionFailure::RejectedOutput)?;
-                        if assessment.outcome == TestOutcome::NotRun {
-                            return Err(ExecutionFailure::RejectedOutput);
-                        }
+                        use sbh_core::witness_schema::WatchVerdict;
+                        let assessment = WitnessAssessment {
+                            outcome: match witness.effective_verdict() {
+                                WatchVerdict::Nominal if approved.expected_response().is_some() => {
+                                    TestOutcome::Passed
+                                }
+                                WatchVerdict::Nominal => TestOutcome::Inconclusive,
+                                WatchVerdict::Halt => TestOutcome::Failed,
+                                WatchVerdict::Degraded => TestOutcome::Inconclusive,
+                            },
+                            witness,
+                        };
                         let definite =
                             |value| matches!(value, TestOutcome::Passed | TestOutcome::Failed);
                         let agreement = (definite(outcome) && definite(assessment.outcome))

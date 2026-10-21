@@ -4,7 +4,7 @@ use sbh_store::{
     dream_memory::MemoryStore,
     memory_authority::{MemoryActor, OperatorAttestation, OperatorVerifier},
 };
-use split_brain_harness::research_witness::{FreshWitnessProvider, WitnessAssessment};
+use split_brain_harness::research_witness::FreshWitnessProvider;
 use split_brain_harness::{
     backends::InferenceEngine, dream::*, dream_engine::*, types::TraceEntry,
 };
@@ -194,16 +194,12 @@ impl FreshWitnessProvider for WitnessScript {
     }
 }
 fn assessment(outcome: TestOutcome) -> Step {
-    Step::Answer(
-        serde_json::to_string(&WitnessAssessment {
-            outcome,
-            rationale: GeneratedClaim {
-                text: "INDEPENDENT_WITNESS_OPINION".into(),
-                trust: SpeculativeTrust::Hypothetical,
-            },
-        })
-        .unwrap(),
-    )
+    let verdict = match outcome {
+        TestOutcome::Passed => "NOMINAL",
+        TestOutcome::Failed => "HALT",
+        _ => "DEGRADED",
+    };
+    Step::Answer(format!(r#"{{"verdict":"{verdict}","findings":[]}}"#))
 }
 #[tokio::test]
 async fn distinct_seeds_are_reproducible_unique_and_recorded_for_all_roles() {
@@ -590,18 +586,19 @@ async fn witness_is_opt_in_and_receives_only_approved_final_answer_projection() 
         .filter(|c| c.role == ResearchRole::Witness)
         .all(|c| c.provenance.model == "offline-witness"));
     for call in witness.inner.calls() {
-        let payload: serde_json::Value = serde_json::from_str(&call.payload).unwrap();
-        let object = payload.as_object().unwrap();
-        assert_eq!(object.len(), 3);
-        assert!(
-            object.contains_key("input")
-                && object.contains_key("final_answer")
-                && object.contains_key("expected_response")
-        );
+        let entries: Vec<String> = serde_json::from_str(
+            call.payload
+                .strip_prefix("<slice>\n")
+                .unwrap()
+                .strip_suffix("\n</slice>")
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(entries.len(), 3);
         assert!(!call.payload.contains("HIDDEN_MEMORY_CONTENT"));
         assert!(!call.payload.contains("failure_trace"));
         assert!(!call.payload.contains("intervention"));
-        assert!(call.system.contains("Agreement is an opinion, never proof"));
+        assert_eq!(call.system, sbh_safety::fair_witness::system_prompt());
     }
     assert!(provider
         .calls()
@@ -726,7 +723,7 @@ async fn multiple_witness_calls_use_final_sample_only_and_inconclusive_agreement
         .inner
         .calls()
         .iter()
-        .any(|c| c.payload.contains("\"expected_response\":null")));
+        .any(|c| c.payload.contains("\"null\"")));
     assert!(report.repair.is_none());
 }
 
@@ -1751,4 +1748,65 @@ async fn decoded_generated_json_is_privacy_screened_before_retention() {
         assert!(!serialized.contains("private-credential"));
         assert!(!serialized.contains("private-key"));
     }
+}
+
+#[tokio::test]
+async fn every_research_witness_prompt_is_isolated_across_runs_and_samples() {
+    let provider = Scripted::new(
+        (0..24)
+            .map(|i| Step::Answer(format!("ANSWER_{i}_END")))
+            .collect(),
+    );
+    let witness = WitnessScript::new((0..24).map(|_| assessment(TestOutcome::Failed)).collect());
+    let mut cfg = config();
+    cfg.base_system_prompt = "GENERATOR_ONLY_SENTINEL".into();
+    let controller = DreamController::new(&provider, cfg)
+        .unwrap()
+        .with_witness(&witness)
+        .unwrap();
+    for run in 0..2 {
+        let mut experiment = lucid();
+        experiment.run_id = format!("isolated-run-{run}").try_into().unwrap();
+        experiment.request.failure.original_prompt = format!("ORIGINAL_RUN_{run}");
+        experiment.request.regression_cases[0].original_prompt = format!("REGRESSION_RUN_{run}");
+        experiment.request.evaluation_budget.witness_calls_per_case = 1;
+        experiment.request.max_total_calls = 25;
+        let report = controller
+            .lucid(&experiment, &Cancellation::default())
+            .await
+            .unwrap();
+        assert_eq!(report.run.status, RunStatus::Completed);
+        assert_eq!(report.witness_evaluations.len(), 12);
+    }
+    let calls = witness.inner.calls();
+    assert_eq!(calls.len(), 24);
+    for (i, call) in calls.iter().enumerate() {
+        assert_eq!(call.system, sbh_safety::fair_witness::system_prompt());
+        assert!(!call.system.contains("GENERATOR_ONLY_SENTINEL"));
+        let entries: Vec<String> = serde_json::from_str(
+            call.payload
+                .strip_prefix("<slice>\n")
+                .unwrap()
+                .strip_suffix("\n</slice>")
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[1], format!("ANSWER_{i}_END"));
+        assert!(!call.payload.contains("HALT"));
+        for prior in 0..i {
+            assert!(!call.payload.contains(&format!("ANSWER_{prior}_END")));
+        }
+        if i >= 12 {
+            assert!(!call.payload.contains("RUN_0"));
+        }
+    }
+    assert_eq!(
+        calls
+            .iter()
+            .map(|c| &c.context)
+            .collect::<HashSet<_>>()
+            .len(),
+        24
+    );
 }

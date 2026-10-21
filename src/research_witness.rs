@@ -1,7 +1,7 @@
 //! Opt-in research evaluation, separate from the external decision-log witness.
 //! Provider factories are trusted adapters and must reset context for every call.
 use crate::{
-    dream::{ContextId, GeneratedClaim, GenerationInput, RunId, TestId, TestOutcome},
+    dream::{ContextId, GenerationInput, RunId, TestId, TestOutcome},
     dream_engine::{EngineSession, InferenceSettings, ProviderProfile},
 };
 use serde::{Deserialize, Serialize};
@@ -58,12 +58,13 @@ pub trait FreshWitnessProvider: Send + Sync {
     ) -> Result<EngineSession, String>;
 }
 
-/// Untrusted independent opinion. Rationale cannot claim verified trust or grants.
+/// Untrusted independent observation. Outcome is a deterministic projection of
+/// the effective verdict, never authority for repairs or memory promotion.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WitnessAssessment {
     pub outcome: TestOutcome,
-    pub rationale: GeneratedClaim,
+    pub witness: sbh_core::witness_schema::WitnessReport,
 }
 
 /// Kept separately from TestResult and never used to promote or produce repairs.
