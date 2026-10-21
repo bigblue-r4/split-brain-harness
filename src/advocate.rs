@@ -8,8 +8,10 @@
 //! predicate (high manipulation risk, a risky tool surface, or a capability
 //! request) decides whether the one extra call is worth making — so the advocate
 //! never runs on obviously-benign traffic. The call itself reuses the
-//! `verifier::run_reconcile` template: fixed Fair Witness identity and one fresh
-//! slice, parsed strictly into verified byte spans and closed enum codes.
+//! `verifier::run_reconcile` template, but keeps its own adversarial identity:
+//! the soul's `[ADVOCATE_SYSTEM_PROMPT]` plus the witness schema's output
+//! contract, one fresh slice per call, parsed strictly into verified byte spans
+//! and closed enum codes. Adversarial stance, no free-text argument.
 
 use sbh_core::witness_schema::{parse_report, WatchSlice, WatchVerdict};
 use sbh_safety::fair_witness;
@@ -59,16 +61,23 @@ pub fn gate(
 pub async fn run(
     input: &str,
     telemetry: &TelemetryResult,
-    _soul: &Soul,
+    soul: &Soul,
     engine: &dyn InferenceEngine,
     gate_reason: Vec<String>,
 ) -> anyhow::Result<AdvocateReport> {
+    if soul.advocate_system_prompt.trim().is_empty() {
+        anyhow::bail!(
+            "advocate soul prompt is empty — add an [ADVOCATE_SYSTEM_PROMPT] section to soul.md"
+        );
+    }
+    let system = format!(
+        "{}\n\n{}",
+        soul.advocate_system_prompt.trim(),
+        fair_witness::output_contract()
+    );
     let slice = WatchSlice::new(vec![input.into(), serde_json::to_string(telemetry)?]);
     let raw = engine
-        .generate(
-            &fair_witness::system_prompt(),
-            &fair_witness::user_payload(&slice),
-        )
+        .generate(&system, &fair_witness::user_payload(&slice))
         .await
         .map_err(|e| anyhow::anyhow!("advocate inference error: {e}"))?;
     let witness = parse_report(&raw, &slice)
@@ -99,7 +108,7 @@ mod tests {
     async fn every_advocate_prompt_is_an_isolated_frame() {
         let engine = Capture(Default::default());
         let mut soul = crate::soul::load(None).unwrap();
-        soul.advocate_system_prompt = "GENERATOR_OVERRIDE_SENTINEL".into();
+        soul.advocate_system_prompt = "ADVERSARIAL_ADVOCATE_SENTINEL".into();
         for input in ["FIRST_ADVOCATE", "SECOND_ADVOCATE"] {
             let report = run(
                 input,
@@ -120,7 +129,14 @@ mod tests {
         let calls = engine.0.lock().unwrap();
         assert_eq!(calls.len(), 2);
         for (i, (system, payload)) in calls.iter().enumerate() {
-            assert_eq!(system, &fair_witness::system_prompt());
+            assert_eq!(
+                system,
+                &format!(
+                    "ADVERSARIAL_ADVOCATE_SENTINEL\n\n{}",
+                    fair_witness::output_contract()
+                )
+            );
+            assert!(!system.contains(fair_witness::SOUL.trim()));
             let entries: Vec<String> = serde_json::from_str(
                 payload
                     .strip_prefix("<slice>\n")
@@ -140,6 +156,35 @@ mod tests {
             assert!(!payload.contains("OBSERVER_ADDRESSED"));
         }
         assert!(!calls[1].1.contains("FIRST_ADVOCATE"));
+    }
+
+    #[tokio::test]
+    async fn empty_advocate_soul_is_an_error_not_a_silent_fair_witness() {
+        let engine = Capture(Default::default());
+        let mut soul = crate::soul::load(None).unwrap();
+        soul.advocate_system_prompt = "  ".into();
+        let err = run("x", &telem(Risk::Low), &soul, &engine, vec![])
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("ADVOCATE_SYSTEM_PROMPT"));
+        assert!(engine.0.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn shipped_advocate_soul_is_adversarial_and_asks_for_no_free_text() {
+        let p = crate::soul::load(None).unwrap().advocate_system_prompt;
+        assert!(p.contains("Devil's Advocate"));
+        for legacy in [
+            "\"argument\"",
+            "\"confidence\"",
+            "\"attack\"",
+            "<original_input>",
+        ] {
+            assert!(
+                !p.contains(legacy),
+                "legacy field {legacy} in advocate soul"
+            );
+        }
     }
 
     fn telem(risk: Risk) -> TelemetryResult {

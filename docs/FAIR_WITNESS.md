@@ -39,9 +39,16 @@ Chris's three fixes (2026-10-16):
 
 ## Watcher wiring (PR B)
 
-- The verifier reconcile adjudicator, advocate, and research Witness now call the
-  fixed Fair Witness system prompt and strict parser. Generator soul settings,
+- The verifier reconcile adjudicator and research Witness now call the fixed
+  Fair Witness system prompt and strict parser. Generator soul settings,
   including the research `base_system_prompt`, cannot override their identity.
+- The advocate is deliberately **not** neutral: Chris chose (2026-10-20) to keep
+  it adversarial. Its system prompt is the soul's `[ADVOCATE_SYSTEM_PROMPT]`
+  (red-team stance, raise-only) followed by `fair_witness::output_contract()`,
+  the same taxonomy and output format rendered from the schema enums. It goes
+  through the same strict parser, so it argues in codes and exact quotes, never
+  free text. Fix 1 (taxonomy) and fix 2 (fresh slice) apply to it; fix 3 (the
+  passive-recorder identity) does not, by design.
 - Each call builds a new JSON slice. Adjudicator entries are original input,
   serialized proposer telemetry, and serialized deterministic flags. Advocate
   entries are original input and serialized telemetry. Research entries are
