@@ -1,29 +1,20 @@
-/// Phase 4 of the Ephemeral Tool Forge — WASM/WASI sandboxed execution.
-///
-/// Takes a verified `GeneratedTool` (Phase 3 output), compiles it to
-/// `wasm32-wasip1`, executes it in the `wasmtime` CLI sandbox (no network,
-/// no filesystem access), captures stdout, then destroys the binary.
-///
-/// **Status**: production-quality, full test coverage.
-/// **Requires**: `rustup target add wasm32-wasip1` and `wasmtime` in PATH.
-///   Run `sbh doctor` to verify the toolchain is installed.
-/// **CLI entry point**: `sbh forge "<capability>" "<input>"` (via `regenerative_forge`)
-/// and stores fingerprint metrics only.
-///
-/// The supervisor code calls `std::process::Command` — that is the supervisor's
-/// own privilege. Model-generated source code is still forbidden from using it
-/// (enforced by static analysis in Phase 3).
-use std::io::Write as _;
-use std::process::{Command, Stdio};
+//! Phase 4 of the Ephemeral Tool Forge — WASM/WASI sandboxed execution.
+//!
+//! Takes a verified `GeneratedTool` (Phase 3 output), compiles it to
+//! `wasm32-wasip1`, executes it in the `wasmtime` CLI sandbox (no network,
+//! no filesystem access), captures stdout, then destroys the binary.
+//!
+//! Requires Linux, bubblewrap, prlimit, a WASI Rust target and wasmtime.
+//! Compilation fails closed when the isolation boundary is unavailable.
+//! Static analysis is defense in depth, not a compiler-host sandbox.
+use crate::process_boundary::{self, Workspace};
+use std::path::PathBuf;
+use std::process::Command;
 use std::time::{Duration, Instant};
 
-/// Hard wall-clock limit on rustc compilation. Model-generated code is stdlib-only
-/// so 60 s is generous; pathological macro/trait-resolution abuse gets cut off here.
 const COMPILE_TIMEOUT: Duration = Duration::from_secs(60);
-
-/// Hard wall-clock limit passed directly to the wasmtime `-W timeout=` flag.
-/// Must be >= the capability constraint max (10 000 ms) and expressed as ms string.
-const WASM_EXEC_TIMEOUT_MS: u64 = 15_000;
+const WASM_EXEC_TIMEOUT_MS: u64 = 10_000;
+const MAX_OUTPUT: usize = 65_536;
 
 use serde::{Deserialize, Serialize};
 
@@ -73,6 +64,8 @@ pub enum CompileOutcome {
     TargetNotInstalled { attempted_target: String },
     /// rustc ran but returned a non-zero exit code.
     CompilationFailed { stderr: String, compilation_ms: u64 },
+    /// Temporary artifacts could not be removed; never report destroyed.
+    CleanupFailed { error: String },
     /// rustc could not be spawned (not on PATH, OS error, etc.).
     CompilerNotFound { error: String },
 }
@@ -83,6 +76,10 @@ pub enum ExecuteOutcome {
     Success {
         stdout: String,
         execution_ms: u64,
+    },
+    /// Temporary artifacts could not be removed; never report destroyed.
+    CleanupFailed {
+        error: String,
     },
     /// wasmtime binary is not available on PATH.
     RuntimeNotFound,
@@ -126,7 +123,7 @@ pub struct WasmExecutionReport {
     /// Captured stdout from the WASM process.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output: Option<String>,
-    /// Binary destroyed after use: always true once compilation completes.
+    /// On-disk temporary artifacts were removed (not a secure-erasure guarantee).
     pub destroyed: bool,
     pub metrics: WasmMetrics,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -143,6 +140,16 @@ pub trait WasmCompiler: Send + Sync {
 
 pub trait WasmExecutor: Send + Sync {
     fn execute(&self, wasm_bytes: &[u8], input: &str) -> ExecuteOutcome;
+    /// Custom implementations must honor limits; the real executor enforces them.
+    fn execute_limited(
+        &self,
+        wasm_bytes: &[u8],
+        input: &str,
+        _runtime_ms: u64,
+        _memory_mb: u64,
+    ) -> ExecuteOutcome {
+        self.execute(wasm_bytes, input)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -153,216 +160,214 @@ pub struct RustcCompiler;
 
 impl WasmCompiler for RustcCompiler {
     fn compile(&self, source: &str) -> CompileOutcome {
-        // Detect installed WASM target (wasm32-wasip1 is the new name, wasm32-wasi the old)
-        let target = match detect_wasm_target() {
-            Some(t) => t,
-            None => {
-                return CompileOutcome::TargetNotInstalled {
-                    attempted_target: "wasm32-wasip1 / wasm32-wasi".into(),
-                }
-            }
+        if source.len() > process_boundary::MAX_INPUT {
+            return compile_error("source limit exceeded", 0);
+        }
+        let workspace = match Workspace::new() {
+            Ok(w) => w,
+            Err(e) => return compile_error(&format!("isolation unavailable: {e}"), 0),
         };
-
-        // Write source + wrapper to a temp file
-        let tmp_dir = std::env::temp_dir().join(format!("sbh-wasm-{}", monotonic_id()));
-        if std::fs::create_dir_all(&tmp_dir).is_err() {
-            return CompileOutcome::CompilationFailed {
-                stderr: "failed to create temp directory".into(),
-                compilation_ms: 0,
+        let result = compile_isolated(source, &workspace);
+        if let Err(e) = workspace.cleanup() {
+            return CompileOutcome::CleanupFailed {
+                error: format!("compiler workspace cleanup failed: {e}"),
             };
         }
-
-        let src_path = tmp_dir.join("tool.rs");
-        let wasm_path = tmp_dir.join("tool.wasm");
-        let full_source = format!("{}\n{}", source, WASM_MAIN);
-
-        if std::fs::write(&src_path, &full_source).is_err() {
-            let _ = std::fs::remove_dir_all(&tmp_dir);
-            return CompileOutcome::CompilationFailed {
-                stderr: "failed to write source file".into(),
-                compilation_ms: 0,
-            };
-        }
-
-        let start = Instant::now();
-
-        // Spawn rustc as a child so we can enforce a wall-clock timeout.
-        let child = Command::new("rustc")
-            .args(["--target", target, "--edition", "2021", "-o"])
-            .arg(&wasm_path)
-            .arg(&src_path)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn();
-
-        let child = match child {
-            Err(e) => {
-                let _ = std::fs::remove_file(&src_path);
-                let _ = std::fs::remove_dir_all(&tmp_dir);
-                return CompileOutcome::CompilerNotFound {
-                    error: format!("could not spawn rustc: {e}"),
-                };
-            }
-            Ok(c) => c,
-        };
-
-        // Move child into a thread; wait for output or kill after COMPILE_TIMEOUT.
-        let pid = child.id();
-        let (tx, rx) = std::sync::mpsc::channel::<std::io::Result<std::process::Output>>();
-        std::thread::spawn(move || {
-            let _ = tx.send(child.wait_with_output());
-        });
-
-        let result = match rx.recv_timeout(COMPILE_TIMEOUT) {
-            Ok(r) => r,
-            Err(_) => {
-                // Kill the rustc process by PID — it's already moved into the thread,
-                // so we signal it via the OS. Cleanup is best-effort.
-                let _ = Command::new("kill").args(["-9", &pid.to_string()]).status();
-                let _ = std::fs::remove_file(&src_path);
-                let _ = std::fs::remove_dir_all(&tmp_dir);
-                return CompileOutcome::CompilationFailed {
-                    stderr: format!("rustc timed out after {}s", COMPILE_TIMEOUT.as_secs()),
-                    compilation_ms: COMPILE_TIMEOUT.as_millis() as u64,
-                };
-            }
-        };
-
-        let compilation_ms = start.elapsed().as_millis() as u64;
-
-        // Remove source immediately (never persist model-generated code)
-        let _ = std::fs::remove_file(&src_path);
-
-        match result {
-            Err(e) => {
-                let _ = std::fs::remove_dir_all(&tmp_dir);
-                CompileOutcome::CompilerNotFound {
-                    error: format!("rustc wait error: {e}"),
-                }
-            }
-            Ok(out) if !out.status.success() => {
-                let _ = std::fs::remove_dir_all(&tmp_dir);
-                CompileOutcome::CompilationFailed {
-                    stderr: String::from_utf8_lossy(&out.stderr)
-                        .chars()
-                        .take(2048)
-                        .collect(),
-                    compilation_ms,
-                }
-            }
-            Ok(_) => {
-                let wasm_bytes = std::fs::read(&wasm_path).unwrap_or_default();
-                // Destroy the compiled WASM — metrics only survive
-                let _ = std::fs::remove_dir_all(&tmp_dir);
-                CompileOutcome::Success {
-                    wasm_bytes,
-                    compilation_ms,
-                }
-            }
-        }
+        result
     }
 }
 
-/// Detect an installed WASM/WASI target via `rustup target list --installed`.
-/// Returns the preferred target name, or None if neither is installed.
-fn detect_wasm_target() -> Option<&'static str> {
-    let out = Command::new("rustup")
-        .args(["target", "list", "--installed"])
-        .output()
-        .ok()?;
-    let targets = String::from_utf8_lossy(&out.stdout);
-    if targets.contains("wasm32-wasip1") {
-        Some("wasm32-wasip1")
-    } else if targets.contains("wasm32-wasi") {
-        Some("wasm32-wasi")
-    } else {
-        None
+fn compile_error(error: &str, compilation_ms: u64) -> CompileOutcome {
+    CompileOutcome::CompilationFailed {
+        stderr: error.into(),
+        compilation_ms,
+    }
+}
+
+fn compile_isolated(source: &str, workspace: &Workspace) -> CompileOutcome {
+    let start = Instant::now();
+    // This query consumes no generated source. Bound its output and lifetime too.
+    let mut query = Command::new("rustc");
+    query.args(["--print", "sysroot"]);
+    let result = match process_boundary::run(&mut query, b"", Duration::from_secs(5), 4096) {
+        Ok(out) if out.status.success() => out,
+        _ => {
+            return CompileOutcome::CompilerNotFound {
+                error: "could not locate Rust sysroot".into(),
+            }
+        }
+    };
+    let sysroot = match PathBuf::from(String::from_utf8_lossy(&result.stdout).trim()).canonicalize()
+    {
+        Ok(root) => root,
+        Err(e) => return compile_error(&format!("invalid Rust sysroot: {e}"), 0),
+    };
+    let targets = ["wasm32-wasip1", "wasm32-wasi"];
+    let target = match targets
+        .iter()
+        .find(|t| sysroot.join("lib/rustlib").join(t).join("lib").is_dir())
+    {
+        Some(t) => *t,
+        None => {
+            return CompileOutcome::TargetNotInstalled {
+                attempted_target: targets.join(" / "),
+            }
+        }
+    };
+    if let Err(e) = workspace.write("tool.rs", format!("{source}\n{WASM_MAIN}").as_bytes()) {
+        return compile_error(&format!("source write failed: {e}"), 0);
+    }
+    let mut command = match process_boundary::compiler_command(&sysroot, &workspace.path) {
+        Ok(c) => c,
+        Err(e) => return compile_error(&format!("compiler isolation unavailable: {e}"), 0),
+    };
+    command.args([
+        "--target",
+        target,
+        "--edition",
+        "2021",
+        "-o",
+        "/work/tool.wasm",
+        "/work/tool.rs",
+    ]);
+    let result = process_boundary::run(&mut command, b"", COMPILE_TIMEOUT, 8192);
+    let elapsed = start.elapsed().as_millis() as u64;
+    match result {
+        Err(e) => compile_error(&format!("isolated compilation failed: {e}"), elapsed),
+        Ok(out) if !out.status.success() => {
+            compile_error(&String::from_utf8_lossy(&out.stderr), elapsed)
+        }
+        Ok(_) => {
+            let artifact = workspace.path.join("tool.wasm");
+            match std::fs::metadata(&artifact).and_then(|meta| {
+                if !meta.is_file() || meta.len() == 0 || meta.len() > process_boundary::MAX_ARTIFACT
+                {
+                    return Err(std::io::Error::other("invalid compiled artifact size"));
+                }
+                std::fs::read(&artifact)
+            }) {
+                Ok(wasm_bytes) => CompileOutcome::Success {
+                    wasm_bytes,
+                    compilation_ms: elapsed,
+                },
+                Err(e) => compile_error(&format!("artifact read failed: {e}"), elapsed),
+            }
+        }
     }
 }
 
 // ---------------------------------------------------------------------------
-// Real executor: wasmtime CLI subprocess
+// Real executor: bounded wasmtime CLI subprocess (no preopens / inherited env)
 // ---------------------------------------------------------------------------
 
 pub struct WasmtimeCli;
-
 impl WasmExecutor for WasmtimeCli {
     fn execute(&self, wasm_bytes: &[u8], input: &str) -> ExecuteOutcome {
-        // Write WASM to a temp file — destroyed immediately after the call
-        let tmp_wasm = std::env::temp_dir().join(format!("sbh-run-{}.wasm", monotonic_id()));
-        if std::fs::write(&tmp_wasm, wasm_bytes).is_err() {
+        self.execute_limited(wasm_bytes, input, WASM_EXEC_TIMEOUT_MS, 64)
+    }
+    fn execute_limited(
+        &self,
+        wasm_bytes: &[u8],
+        input: &str,
+        runtime_ms: u64,
+        memory_mb: u64,
+    ) -> ExecuteOutcome {
+        if input.len() > process_boundary::MAX_INPUT
+            || wasm_bytes.len() as u64 > process_boundary::MAX_ARTIFACT
+            || runtime_ms == 0
+            || runtime_ms > WASM_EXEC_TIMEOUT_MS
+            || memory_mb == 0
+            || memory_mb > 256
+        {
             return ExecuteOutcome::RuntimeError {
-                error: "failed to write wasm to temp file".into(),
+                error: "executor input/resource limit exceeded".into(),
             };
         }
-
-        let start = Instant::now();
-
-        // Spawn wasmtime and feed input via stdin. We wait for the process to
-        // finish BEFORE deleting the WASM file — spawning is non-blocking so
-        // deleting first would cause a race where wasmtime tries to open a
-        // file that no longer exists.
-        let spawn_result = Command::new("wasmtime")
-            .arg(format!("-W timeout={WASM_EXEC_TIMEOUT_MS}ms"))
-            .arg("--")
-            .arg(&tmp_wasm)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn();
-
-        let output_result = match spawn_result {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                let _ = std::fs::remove_file(&tmp_wasm);
-                return ExecuteOutcome::RuntimeNotFound;
-            }
+        let workspace = match Workspace::new() {
+            Ok(w) => w,
             Err(e) => {
-                let _ = std::fs::remove_file(&tmp_wasm);
                 return ExecuteOutcome::RuntimeError {
-                    error: format!("spawn error: {e}"),
-                };
-            }
-            Ok(mut child) => {
-                if let Some(mut stdin) = child.stdin.take() {
-                    let _ = stdin.write_all(input.as_bytes());
+                    error: format!("runtime workspace failed: {e}"),
                 }
-                child.wait_with_output()
             }
         };
-
-        // WASM binary destroyed after the process has exited and closed the fd
-        let _ = std::fs::remove_file(&tmp_wasm);
-
-        match output_result {
-            Err(e) => ExecuteOutcome::RuntimeError {
-                error: format!("wait error: {e}"),
-            },
-            Ok(out) => {
-                let execution_ms = start.elapsed().as_millis() as u64;
-                let stdout = String::from_utf8_lossy(&out.stdout)
-                    .chars()
-                    .take(65_536)
-                    .collect();
-                let exit_code = out.status.code().unwrap_or(-1);
-
-                if out.status.success() {
-                    ExecuteOutcome::Success {
-                        stdout,
-                        execution_ms,
-                    }
-                } else {
-                    let stderr = String::from_utf8_lossy(&out.stderr)
-                        .chars()
-                        .take(1024)
-                        .collect();
-                    ExecuteOutcome::ExecutionFailed {
-                        stderr,
-                        exit_code,
-                        execution_ms,
-                    }
-                }
-            }
+        let result = execute_isolated(wasm_bytes, input, runtime_ms, memory_mb, &workspace);
+        if let Err(e) = workspace.cleanup() {
+            return ExecuteOutcome::CleanupFailed {
+                error: format!("runtime workspace cleanup failed: {e}"),
+            };
         }
+        result
+    }
+}
+
+fn execute_isolated(
+    wasm_bytes: &[u8],
+    input: &str,
+    runtime_ms: u64,
+    memory_mb: u64,
+    workspace: &Workspace,
+) -> ExecuteOutcome {
+    if let Err(e) = workspace.write("tool.wasm", wasm_bytes) {
+        return ExecuteOutcome::RuntimeError {
+            error: format!("runtime artifact write failed: {e}"),
+        };
+    }
+    // Resolve the operator-installed executable before clearing the environment.
+    // The WASI guest gets no filesystem preopens, sockets or environment options.
+    let runtime = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|p| p.join("wasmtime"))
+        .find(|p| p.is_file());
+    let runtime = match runtime.and_then(|p| p.canonicalize().ok()) {
+        Some(p) => p,
+        None => return ExecuteOutcome::RuntimeNotFound,
+    };
+    // Wasmtime reserves a large virtual address range for guarded linear memory.
+    // Keep the host limit finite but leave room for that reservation.
+    let mut command =
+        process_boundary::limited_command(16 * 1024 * 1024 * 1024, runtime_ms.div_ceil(1000) + 1);
+    command
+        .arg(runtime)
+        .env("HOME", &workspace.path)
+        .env("XDG_CACHE_HOME", workspace.path.join("cache"))
+        .current_dir(&workspace.path)
+        .args([
+            "-C",
+            "cache=n",
+            "-C",
+            "parallel-compilation=n",
+            "-W",
+            &format!("timeout={runtime_ms}ms"),
+            "-W",
+            &format!("max-memory-size={}", memory_mb * 1_048_576),
+            "-W",
+            "max-memories=1",
+            "-W",
+            "max-tables=1",
+            "-W",
+            "max-table-elements=10000",
+            "--",
+        ])
+        .arg(workspace.path.join("tool.wasm"));
+    let start = Instant::now();
+    match process_boundary::run(
+        &mut command,
+        input.as_bytes(),
+        Duration::from_millis(runtime_ms),
+        MAX_OUTPUT,
+    ) {
+        Err(e) => ExecuteOutcome::RuntimeError {
+            error: format!("bounded runtime failed: {e}"),
+        },
+        Ok(out) if out.status.success() => ExecuteOutcome::Success {
+            stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+            execution_ms: start.elapsed().as_millis() as u64,
+        },
+        Ok(out) => ExecuteOutcome::ExecutionFailed {
+            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+            exit_code: out.status.code().unwrap_or(-1),
+            execution_ms: start.elapsed().as_millis() as u64,
+        },
     }
 }
 
@@ -517,6 +522,20 @@ impl WasmForge {
                     memory_update: None,
                 };
             }
+            CompileOutcome::CleanupFailed { error } => {
+                self.state.record_run(&ToolMetrics {
+                    success: false,
+                    input_bytes: input.len(),
+                    ..Default::default()
+                });
+                return WasmExecutionReport {
+                    accepted: true,
+                    compiled: false,
+                    compilation_error: Some(error),
+                    destroyed: false,
+                    ..rejected(vec![])
+                };
+            }
             CompileOutcome::CompilerNotFound { error } => {
                 let metrics = zero_metrics(input);
                 self.state.record_run(&ToolMetrics {
@@ -543,15 +562,26 @@ impl WasmForge {
         let wasm_binary_bytes = wasm_bytes.len();
 
         // Execute
-        let execute_outcome = self.executor.execute(&wasm_bytes, input);
+        let execution_started = Instant::now();
+        let execute_outcome = self.executor.execute_limited(
+            &wasm_bytes,
+            input,
+            req.constraints.max_runtime_ms,
+            req.constraints.max_memory_mb,
+        );
         // wasm_bytes is no longer needed — drop it now
         drop(wasm_bytes);
 
+        let failed_execution_ms = execution_started.elapsed().as_millis() as u64;
+        let destroyed = !matches!(&execute_outcome, ExecuteOutcome::CleanupFailed { .. });
         let (executed, stdout, execution_ms, execution_error) = match execute_outcome {
             ExecuteOutcome::Success {
                 stdout,
                 execution_ms,
             } => (true, Some(stdout), execution_ms, None),
+            ExecuteOutcome::CleanupFailed { error } => {
+                (false, None, failed_execution_ms, Some(error))
+            }
             ExecuteOutcome::RuntimeNotFound => (
                 false,
                 None,
@@ -563,7 +593,9 @@ impl WasmForge {
                 execution_ms,
                 ..
             } => (false, None, execution_ms, Some(stderr)),
-            ExecuteOutcome::RuntimeError { error } => (false, None, 0, Some(error)),
+            ExecuteOutcome::RuntimeError { error } => {
+                (false, None, failed_execution_ms, Some(error))
+            }
         };
 
         let success = executed && execution_error.is_none();
@@ -607,7 +639,7 @@ impl WasmForge {
             executed,
             execution_error,
             output: stdout,
-            destroyed: true,
+            destroyed,
             metrics,
             memory_update,
         }
@@ -671,14 +703,6 @@ fn shape_token(contract: &str) -> String {
         .filter(|s| !s.is_empty())
         .collect::<Vec<_>>()
         .join("_")
-}
-
-fn monotonic_id() -> String {
-    let pid = std::process::id();
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| format!("{}-{}{}", pid, d.as_secs(), d.subsec_nanos()))
-        .unwrap_or_else(|_| format!("{}-0", pid))
 }
 
 // ---------------------------------------------------------------------------
@@ -775,6 +799,148 @@ mod tests {
     }
 
     const MOCK_WASM: &[u8] = b"\x00asm\x01\x00\x00\x00"; // minimal WASM magic bytes
+
+    #[test]
+    fn cleanup_failures_never_claim_destruction_or_admit_memory() {
+        for (compile, execute) in [
+            (
+                CompileOutcome::CleanupFailed {
+                    error: "synthetic cleanup failure".into(),
+                },
+                ExecuteOutcome::RuntimeNotFound,
+            ),
+            (
+                CompileOutcome::Success {
+                    wasm_bytes: MOCK_WASM.to_vec(),
+                    compilation_ms: 1,
+                },
+                ExecuteOutcome::CleanupFailed {
+                    error: "synthetic cleanup failure".into(),
+                },
+            ),
+        ] {
+            let mut forge = forge_with(compile, execute);
+            let report = forge.handle(&clean_req("word_count"), &verified_tool(), "hello");
+            assert!(!report.destroyed);
+            assert!(!report.executed);
+            assert!(report.memory_update.is_none());
+            assert_eq!(forge.memory.len(), 0);
+        }
+    }
+
+    #[test]
+    fn supervisor_passes_request_limits_to_executor() {
+        struct LimitExecutor;
+        impl WasmExecutor for LimitExecutor {
+            fn execute(&self, _: &[u8], _: &str) -> ExecuteOutcome {
+                panic!("must use request limits")
+            }
+            fn execute_limited(
+                &self,
+                _: &[u8],
+                _: &str,
+                runtime: u64,
+                memory: u64,
+            ) -> ExecuteOutcome {
+                assert_eq!((runtime, memory), (123, 17));
+                ExecuteOutcome::Success {
+                    stdout: "ok".into(),
+                    execution_ms: 1,
+                }
+            }
+        }
+        let mut req = clean_req("word_count");
+        req.constraints.max_runtime_ms = 123;
+        req.constraints.max_memory_mb = 17;
+        let mut forge = WasmForge::with_deps(
+            Box::new(MockCompiler(CompileOutcome::Success {
+                wasm_bytes: MOCK_WASM.to_vec(),
+                compilation_ms: 1,
+            })),
+            Box::new(LimitExecutor),
+        );
+        assert!(forge.handle(&req, &verified_tool(), "hello").executed);
+    }
+
+    #[test]
+    #[ignore = "requires operator-provisioned Linux isolation tools, WASI target and Wasmtime"]
+    fn real_wasi_runtime_enforces_isolation_and_limits() {
+        fn compile(source: &str) -> Vec<u8> {
+            match RustcCompiler.compile(source) {
+                CompileOutcome::Success { wasm_bytes, .. } => wasm_bytes,
+                other => panic!("isolated WASI compilation failed: {other:?}"),
+            }
+        }
+        let clean = compile(
+            "pub fn run(input: &str) -> Result<String, String> { Ok(input.to_uppercase()) }",
+        );
+        match WasmtimeCli.execute_limited(&clean, "hello", 2000, 64) {
+            ExecuteOutcome::Success { stdout, .. } => assert_eq!(stdout, "HELLO"),
+            other => panic!("ordinary WASI execution failed: {other:?}"),
+        }
+        let observed = Workspace::new().unwrap();
+        assert!(matches!(
+            execute_isolated(&clean, "hello", 2000, 64, &observed),
+            ExecuteOutcome::Success { .. }
+        ));
+        let artifacts: Vec<_> = std::fs::read_dir(&observed.path)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(
+            artifacts,
+            vec![std::ffi::OsString::from("tool.wasm")],
+            "runtime must not persist compiled-module caches"
+        );
+        observed.cleanup().unwrap();
+        let marker = Workspace::new().unwrap();
+        marker
+            .write("host-canary", b"SYNTHETIC_FILE_CANARY")
+            .unwrap();
+        let source = format!(
+            "pub fn run(_: &str) -> Result<String, String> {{ Ok(include_str!({:?}).into()) }}",
+            marker.path.join("host-canary")
+        );
+        assert!(matches!(
+            RustcCompiler.compile(&source),
+            CompileOutcome::CompilationFailed { .. }
+        ));
+        let runtime_read = compile(&format!("pub fn run(_: &str) -> Result<String, String> {{ Ok(if std::fs::read_to_string({:?}).is_err() {{ \"denied\" }} else {{ \"leaked\" }}.into()) }}", marker.path.join("host-canary")));
+        match WasmtimeCli.execute_limited(&runtime_read, "", 2000, 64) {
+            ExecuteOutcome::Success { stdout, .. } => assert_eq!(stdout, "denied"),
+            other => panic!("guest filesystem isolation check failed: {other:?}"),
+        }
+        let environment = compile("pub fn run(_: &str) -> Result<String, String> { Ok(format!(\"{}|{}\", option_env!(\"SGAIL_RUNTIME_CANARY\").unwrap_or(\"absent\"), std::env::var(\"SGAIL_RUNTIME_CANARY\").unwrap_or_else(|_| \"absent\".into()))) }");
+        match WasmtimeCli.execute_limited(&environment, "", 2000, 64) {
+            ExecuteOutcome::Success { stdout, .. } => assert_eq!(stdout, "absent|absent"),
+            other => panic!("environment isolation check failed: {other:?}"),
+        }
+        let spin = compile(
+            "pub fn run(_: &str) -> Result<String, String> { loop { std::hint::spin_loop(); } }",
+        );
+        let start = Instant::now();
+        let timeout = WasmtimeCli.execute_limited(&spin, "", 200, 64);
+        eprintln!("spin result: {timeout:?}");
+        assert!(
+            matches!(timeout, ExecuteOutcome::RuntimeError { ref error } if error.contains("deadline"))
+                || matches!(timeout, ExecuteOutcome::ExecutionFailed { ref stderr, .. } if stderr.contains("interrupt") || stderr.contains("timeout"))
+        );
+        assert!(start.elapsed() < Duration::from_secs(2));
+        let memory = compile("pub fn run(_: &str) -> Result<String, String> { let data = vec![1u8; 16 * 1024 * 1024]; std::hint::black_box(&data); Ok(\"unexpected\".into()) }");
+        let memory_error = WasmtimeCli.execute_limited(&memory, "", 2000, 8);
+        eprintln!("memory result: {memory_error:?}");
+        assert!(
+            matches!(memory_error, ExecuteOutcome::ExecutionFailed { ref stderr, .. } if stderr.contains("memory") || stderr.contains("unreachable"))
+        );
+        let flood = compile(
+            "pub fn run(_: &str) -> Result<String, String> { Ok(\"x\".repeat(1_000_000)) }",
+        );
+        assert!(
+            matches!(WasmtimeCli.execute_limited(&flood, "", 2000, 64), ExecuteOutcome::RuntimeError { ref error } if error.contains("output limit"))
+        );
+        let malformed = WasmtimeCli.execute_limited(b"not wasm", "", 2000, 64);
+        assert!(matches!(malformed, ExecuteOutcome::ExecutionFailed { .. }));
+    }
 
     // --- Acceptance path ---
 

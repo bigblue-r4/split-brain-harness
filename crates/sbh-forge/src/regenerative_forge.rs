@@ -315,6 +315,11 @@ impl<'e> RegenerativeForge<'e> {
                     attempts.push(record);
                     break; // Environment issue — retrying won't help
                 }
+                CompileOutcome::CleanupFailed { error } => {
+                    record.failure_reason = Some(format!("compiler cleanup failed: {error}"));
+                    attempts.push(record);
+                    break;
+                }
                 CompileOutcome::CompilerNotFound { error } => {
                     let reason = format!("compiler not found: {error}");
                     record.failure_reason = Some(reason.clone());
@@ -336,7 +341,12 @@ impl<'e> RegenerativeForge<'e> {
             record.compilation_succeeded = true;
 
             // Step 4: execute
-            let execute_outcome = self.executor.execute(&wasm_bytes, input);
+            let execute_outcome = self.executor.execute_limited(
+                &wasm_bytes,
+                input,
+                req.constraints.max_runtime_ms,
+                req.constraints.max_memory_mb,
+            );
             drop(wasm_bytes);
 
             match execute_outcome {
@@ -345,6 +355,11 @@ impl<'e> RegenerativeForge<'e> {
                     attempts.push(record);
                     succeeded = true;
                     final_output = Some(stdout);
+                    break;
+                }
+                ExecuteOutcome::CleanupFailed { error } => {
+                    record.failure_reason = Some(format!("runtime cleanup failed: {error}"));
+                    attempts.push(record);
                     break;
                 }
                 ExecuteOutcome::RuntimeNotFound => {
