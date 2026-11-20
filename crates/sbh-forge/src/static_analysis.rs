@@ -31,6 +31,12 @@ const FORBIDDEN: &[(&str, &str)] = &[
     ("unsafe_code", "unsafe {"),
     ("unsafe_code", "unsafe fn "),
     ("unsafe_code", "unsafe impl "),
+    // Compile-time host reads. These are only defense in depth: compiler
+    // namespace isolation remains authoritative even for obfuscated macros.
+    ("compile_time_read", "include_str!"),
+    ("compile_time_read", "include_bytes!"),
+    ("compile_time_read", "include!"),
+    ("compile_time_read", "env!"),
     // Environment access
     ("env_access", "std::env::"),
     ("env_access", "env::var("),

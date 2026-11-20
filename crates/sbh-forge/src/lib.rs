@@ -7,6 +7,7 @@
 
 pub mod code_gen;
 pub mod generative_forge;
+mod process_boundary;
 pub mod regenerative_forge;
 pub mod reputation;
 pub mod static_analysis;
