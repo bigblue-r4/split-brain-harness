@@ -19,6 +19,9 @@ sbh-llm    = { path = "../sbh-llm", version = "0.1.0" }
 sbh-safety = { path = "../sbh-safety", version = "0.1.0" }
 sbh-store  = { path = "../sbh-store", version = "0.1.0" }
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [dev-dependencies]
 tokio       = { version = "1.38", features = ["macros", "rt", "rt-multi-thread"] }
 tempfile    = "3"

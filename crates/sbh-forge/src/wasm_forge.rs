@@ -328,8 +328,14 @@ fn execute_isolated(
         process_boundary::limited_command(16 * 1024 * 1024 * 1024, runtime_ms.div_ceil(1000) + 1);
     command
         .arg(runtime)
+        .env("HOME", &workspace.path)
+        .env("XDG_CACHE_HOME", workspace.path.join("cache"))
         .current_dir(&workspace.path)
         .args([
+            "-C",
+            "cache=n",
+            "-C",
+            "parallel-compilation=n",
             "-W",
             &format!("timeout={runtime_ms}ms"),
             "-W",
@@ -854,6 +860,86 @@ mod tests {
             Box::new(LimitExecutor),
         );
         assert!(forge.handle(&req, &verified_tool(), "hello").executed);
+    }
+
+    #[test]
+    #[ignore = "requires operator-provisioned Linux isolation tools, WASI target and Wasmtime"]
+    fn real_wasi_runtime_enforces_isolation_and_limits() {
+        fn compile(source: &str) -> Vec<u8> {
+            match RustcCompiler.compile(source) {
+                CompileOutcome::Success { wasm_bytes, .. } => wasm_bytes,
+                other => panic!("isolated WASI compilation failed: {other:?}"),
+            }
+        }
+        let clean = compile(
+            "pub fn run(input: &str) -> Result<String, String> { Ok(input.to_uppercase()) }",
+        );
+        match WasmtimeCli.execute_limited(&clean, "hello", 2000, 64) {
+            ExecuteOutcome::Success { stdout, .. } => assert_eq!(stdout, "HELLO"),
+            other => panic!("ordinary WASI execution failed: {other:?}"),
+        }
+        let observed = Workspace::new().unwrap();
+        assert!(matches!(
+            execute_isolated(&clean, "hello", 2000, 64, &observed),
+            ExecuteOutcome::Success { .. }
+        ));
+        let artifacts: Vec<_> = std::fs::read_dir(&observed.path)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(
+            artifacts,
+            vec![std::ffi::OsString::from("tool.wasm")],
+            "runtime must not persist compiled-module caches"
+        );
+        observed.cleanup().unwrap();
+        let marker = Workspace::new().unwrap();
+        marker
+            .write("host-canary", b"SYNTHETIC_FILE_CANARY")
+            .unwrap();
+        let source = format!(
+            "pub fn run(_: &str) -> Result<String, String> {{ Ok(include_str!({:?}).into()) }}",
+            marker.path.join("host-canary")
+        );
+        assert!(matches!(
+            RustcCompiler.compile(&source),
+            CompileOutcome::CompilationFailed { .. }
+        ));
+        let runtime_read = compile(&format!("pub fn run(_: &str) -> Result<String, String> {{ Ok(if std::fs::read_to_string({:?}).is_err() {{ \"denied\" }} else {{ \"leaked\" }}.into()) }}", marker.path.join("host-canary")));
+        match WasmtimeCli.execute_limited(&runtime_read, "", 2000, 64) {
+            ExecuteOutcome::Success { stdout, .. } => assert_eq!(stdout, "denied"),
+            other => panic!("guest filesystem isolation check failed: {other:?}"),
+        }
+        let environment = compile("pub fn run(_: &str) -> Result<String, String> { Ok(format!(\"{}|{}\", option_env!(\"SGAIL_RUNTIME_CANARY\").unwrap_or(\"absent\"), std::env::var(\"SGAIL_RUNTIME_CANARY\").unwrap_or_else(|_| \"absent\".into()))) }");
+        match WasmtimeCli.execute_limited(&environment, "", 2000, 64) {
+            ExecuteOutcome::Success { stdout, .. } => assert_eq!(stdout, "absent|absent"),
+            other => panic!("environment isolation check failed: {other:?}"),
+        }
+        let spin = compile(
+            "pub fn run(_: &str) -> Result<String, String> { loop { std::hint::spin_loop(); } }",
+        );
+        let start = Instant::now();
+        let timeout = WasmtimeCli.execute_limited(&spin, "", 200, 64);
+        eprintln!("spin result: {timeout:?}");
+        assert!(
+            matches!(timeout, ExecuteOutcome::RuntimeError { ref error } if error.contains("deadline"))
+                || matches!(timeout, ExecuteOutcome::ExecutionFailed { ref stderr, .. } if stderr.contains("interrupt") || stderr.contains("timeout"))
+        );
+        assert!(start.elapsed() < Duration::from_secs(2));
+        let memory = compile("pub fn run(_: &str) -> Result<String, String> { let data = vec![1u8; 16 * 1024 * 1024]; std::hint::black_box(&data); Ok(\"unexpected\".into()) }");
+        let memory_error = WasmtimeCli.execute_limited(&memory, "", 2000, 8);
+        eprintln!("memory result: {memory_error:?}");
+        assert!(
+            matches!(memory_error, ExecuteOutcome::ExecutionFailed { ref stderr, .. } if stderr.contains("memory") || stderr.contains("unreachable"))
+        );
+        let flood = compile(
+            "pub fn run(_: &str) -> Result<String, String> { Ok(\"x\".repeat(1_000_000)) }",
+        );
+        assert!(
+            matches!(WasmtimeCli.execute_limited(&flood, "", 2000, 64), ExecuteOutcome::RuntimeError { ref error } if error.contains("output limit"))
+        );
+        let malformed = WasmtimeCli.execute_limited(b"not wasm", "", 2000, 64);
+        assert!(matches!(malformed, ExecuteOutcome::ExecutionFailed { .. }));
     }
 
     // --- Acceptance path ---

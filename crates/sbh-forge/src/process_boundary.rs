@@ -3,10 +3,6 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::sync::{
-    atomic::{AtomicBool, Ordering},
-    Arc,
-};
 use std::time::{Duration, Instant};
 
 pub(crate) const MAX_INPUT: usize = 1_048_576;
@@ -117,37 +113,108 @@ pub(crate) fn limited_command(address_space: u64, cpu_seconds: u64) -> Command {
     command
 }
 
-fn reader(mut input: impl Read, max: usize, overflow: Arc<AtomicBool>) -> io::Result<Vec<u8>> {
-    let mut buf = Vec::with_capacity(max.min(8192));
+#[cfg(unix)]
+fn nonblocking(fd: &impl std::os::fd::AsRawFd) -> io::Result<()> {
+    let raw = fd.as_raw_fd();
+    // SAFETY: this is a live owned pipe descriptor. F_GETFL takes no third
+    // argument; F_SETFL changes only its status flags, retaining all other flags.
+    let flags = unsafe { libc::fcntl(raw, libc::F_GETFL) };
+    if flags < 0 || unsafe { libc::fcntl(raw, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn drain(input: &mut impl Read, buffer: &mut Vec<u8>, limit: usize) -> io::Result<bool> {
     let mut block = [0u8; 4096];
     loop {
-        let n = input.read(&mut block)?;
-        if n == 0 {
-            return Ok(buf);
-        }
-        let room = max - buf.len();
-        buf.extend_from_slice(&block[..n.min(room)]);
-        if n > room {
-            overflow.store(true, Ordering::Release);
-            return Ok(buf);
+        match input.read(&mut block) {
+            Ok(0) => return Ok(true),
+            Ok(n) => {
+                let room = limit - buffer.len();
+                if n > room {
+                    return Err(io::Error::other("subprocess output limit exceeded"));
+                }
+                buffer.extend_from_slice(&block[..n]);
+            }
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => return Ok(false),
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
         }
     }
 }
 
-/// Entire stdin/stdout/stderr lifecycle shares one deadline. Output is bounded
-/// while reading, and every exit path terminates the process group and reaps it.
+#[cfg(target_os = "linux")]
+struct ProcessGuard {
+    child: std::process::Child,
+    reaped: bool,
+}
+#[cfg(target_os = "linux")]
+impl ProcessGuard {
+    fn exited(&self) -> io::Result<bool> {
+        // SAFETY: siginfo_t is a C output structure valid when zero-initialized;
+        // waitid writes within it. WNOWAIT keeps the child PID allocated until
+        // group termination, preventing a recycled PID from naming another group.
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        let result = unsafe {
+            libc::waitid(
+                libc::P_PID,
+                self.child.id(),
+                &mut info,
+                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
+            )
+        };
+        if result < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: a successful waitid initializes si_pid, or leaves the zero PID
+        // when WNOHANG finds no terminated child.
+        Ok(unsafe { info.si_pid() } != 0)
+    }
+    fn terminate_group(&self) {
+        // SAFETY: the unreaped positive child PID still owns this process group.
+        let group = self.child.id() as libc::pid_t;
+        if group > 1 {
+            unsafe {
+                libc::kill(-group, libc::SIGKILL);
+            }
+        }
+    }
+    fn finish(&mut self) -> io::Result<std::process::ExitStatus> {
+        self.terminate_group();
+        let status = self.child.wait()?;
+        self.reaped = true;
+        Ok(status)
+    }
+}
+#[cfg(target_os = "linux")]
+impl Drop for ProcessGuard {
+    fn drop(&mut self) {
+        if !self.reaped {
+            self.terminate_group();
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+}
+
+/// Nonblocking I/O keeps stdin, output EOF and process exit under one deadline.
+/// No worker thread can outlive a call because a descendant retains a pipe.
+/// Process groups are killed/reaped on every exit; compiler PID namespaces add
+/// containment for descendants that create a new session inside the sandbox.
 pub(crate) fn run(
     command: &mut Command,
     input: &[u8],
     deadline: Duration,
     max_output: usize,
 ) -> io::Result<Output> {
-    #[cfg(not(unix))]
+    #[cfg(not(target_os = "linux"))]
     {
         let _ = (command, input, deadline, max_output);
         Err(io::Error::other("unsupported process boundary"))
     }
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     {
         use std::os::unix::process::CommandExt;
         if input.len() > MAX_INPUT {
@@ -158,67 +225,76 @@ pub(crate) fn run(
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let mut child = command.spawn()?;
-        let group = child.id();
-        let overflow = Arc::new(AtomicBool::new(false));
-        let stdout = child.stdout.take().expect("piped stdout");
-        let stderr = child.stderr.take().expect("piped stderr");
-        let out_limit = overflow.clone();
-        let err_limit = overflow.clone();
-        let out = std::thread::spawn(move || reader(stdout, max_output, out_limit));
-        let err = std::thread::spawn(move || reader(stderr, max_output, err_limit));
-        let mut stdin = child.stdin.take().expect("piped stdin");
-        let bytes = input.to_vec();
-        let writer = std::thread::spawn(move || stdin.write_all(&bytes));
         let start = Instant::now();
-        let result = loop {
-            if overflow.load(Ordering::Acquire) {
-                break Err(io::Error::other("subprocess output limit exceeded"));
-            }
+        let mut child = ProcessGuard {
+            child: command.spawn()?,
+            reaped: false,
+        };
+        let mut stdin = child.child.stdin.take();
+        let mut stdout = child.child.stdout.take().expect("piped stdout");
+        let mut stderr = child.child.stderr.take().expect("piped stderr");
+        nonblocking(stdin.as_ref().expect("piped stdin"))?;
+        nonblocking(&stdout)?;
+        nonblocking(&stderr)?;
+        let mut written = 0;
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let mut out_eof = false;
+        let mut err_eof = false;
+        loop {
             if start.elapsed() >= deadline {
-                break Err(io::Error::new(
+                return Err(io::Error::new(
                     io::ErrorKind::TimedOut,
                     "subprocess deadline exceeded",
                 ));
             }
-            match child.try_wait() {
-                Ok(Some(status)) => break Ok(status),
-                Ok(None) => std::thread::sleep(Duration::from_millis(5)),
-                Err(e) => break Err(e),
+            if let Some(pipe) = stdin.as_mut() {
+                if written == input.len() {
+                    stdin.take();
+                } else {
+                    let end = (written + 16384).min(input.len());
+                    match pipe.write(&input[written..end]) {
+                        Ok(0) => {
+                            return Err(io::Error::new(
+                                io::ErrorKind::WriteZero,
+                                "subprocess stdin closed",
+                            ))
+                        }
+                        Ok(n) => written += n,
+                        Err(e)
+                            if matches!(
+                                e.kind(),
+                                io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                            ) => {}
+                        Err(e) if e.kind() == io::ErrorKind::BrokenPipe => {
+                            stdin.take();
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
             }
-        };
-        // Also kill descendants when the leader exits before closing its pipes.
-        let killed = Command::new("/bin/kill")
-            .env_clear()
-            .args(["-KILL", "--", &format!("-{group}")])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-        if killed.is_err() {
-            let _ = child.kill();
+            if !out_eof {
+                out_eof = drain(&mut stdout, &mut out, max_output)?;
+            }
+            if !err_eof {
+                err_eof = drain(&mut stderr, &mut err, max_output)?;
+            }
+            if child.exited()? && out_eof && err_eof {
+                let status = child.finish()?;
+                if status.success() && written != input.len() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::BrokenPipe,
+                        "could not deliver complete subprocess input",
+                    ));
+                }
+                return Ok(Output {
+                    status,
+                    stdout: out,
+                    stderr: err,
+                });
+            }
+            std::thread::sleep(Duration::from_millis(2));
         }
-        let _ = child.wait();
-        let write_result = writer
-            .join()
-            .map_err(|_| io::Error::other("stdin worker failed"))?;
-        let stdout = out
-            .join()
-            .map_err(|_| io::Error::other("stdout worker failed"))??;
-        let stderr = err
-            .join()
-            .map_err(|_| io::Error::other("stderr worker failed"))??;
-        let status = result?;
-        if overflow.load(Ordering::Acquire) {
-            return Err(io::Error::other("subprocess output limit exceeded"));
-        }
-        if status.success() {
-            write_result?;
-        }
-        Ok(Output {
-            status,
-            stdout,
-            stderr,
-        })
     }
 }
 
@@ -248,6 +324,20 @@ mod tests {
         assert!(start.elapsed() < Duration::from_secs(2));
     }
     #[test]
+    fn detached_pipe_holder_cannot_extend_deadline_after_leader_exit() {
+        let mut cmd = Command::new("/bin/sh");
+        // The detached process is self-terminating, even on test assertion failure.
+        cmd.args([
+            "-c",
+            "setsid /bin/sh -c 'sleep 2; printf delayed' & sleep 0.1; exit 0",
+        ]);
+        let start = Instant::now();
+        let error = run(&mut cmd, b"", Duration::from_millis(200), 1024).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(start.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
     fn private_workspace_rejects_existing_files_and_symlinks() {
         use std::os::unix::fs::{symlink, PermissionsExt};
         let dir = Workspace::new().unwrap();
@@ -263,6 +353,29 @@ mod tests {
         dir.cleanup().unwrap();
         assert!(dir.cleanup().is_err());
     }
+    #[test]
+    #[ignore = "permission-denial fixture requires an unprivileged Linux test user"]
+    fn cleanup_permission_denial_is_observable_and_recoverable() {
+        use std::os::unix::fs::PermissionsExt;
+        // SAFETY: geteuid has no pointer arguments or side effects.
+        assert_ne!(
+            unsafe { libc::geteuid() },
+            0,
+            "run this fixture as an unprivileged user"
+        );
+        let workspace = Workspace::new().unwrap();
+        let nested = workspace.path.join("locked");
+        fs::create_dir(&nested).unwrap();
+        fs::write(nested.join("fixture"), b"synthetic").unwrap();
+        fs::set_permissions(&nested, fs::Permissions::from_mode(0o000)).unwrap();
+        let denied = workspace.cleanup();
+        // Restore before assertions so even an assertion failure leaves no locked artifact.
+        fs::set_permissions(&nested, fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(denied.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        workspace.cleanup().unwrap();
+        assert!(!workspace.path.exists());
+    }
+
     #[test]
     #[ignore = "requires operator-installed bubblewrap/prlimit and enabled user namespaces; run explicitly"]
     fn sandbox_is_empty_and_does_not_inherit_host_markers() {

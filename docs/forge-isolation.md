@@ -2,7 +2,7 @@
 
 The real compiler/executor now require Linux. Operators must provision
 bubblewrap (`/usr/bin/bwrap`), util-linux prlimit (`/usr/bin/prlimit`),
-`/bin/kill`, an installed Rust WASI target, and wasmtime on a trusted PATH.
+an installed Rust WASI target, and wasmtime on a trusted PATH.
 The application never installs these tools. Unsupported platforms, disabled user
 namespaces, missing tools or sandbox errors fail the operation without an
 unrestricted fallback. Existing mock compiler/executor interfaces remain usable
@@ -31,8 +31,17 @@ are supplied. Unknown CLI flags fail closed; operators must validate the selecte
 Wasmtime version before deployment. See the [official Wasmtime CLI option
 reference](https://docs.wasmtime.dev/cli-options.html) and [Wasm options](https://docs.wasmtime.dev/api/wasmtime_cli_flags/struct.WasmOptions.html).
 
-The supervisor drains output with bounded readers and writes stdin concurrently
-under a common deadline. It terminates/reaps process groups before cleanup.
+Runtime explicitly disables compiled-module caching and parallel compilation,
+and confines HOME/XDG_CACHE_HOME to the disposable workdir. This avoids default
+user-cache writes and bounds compilation concurrency.
+
+The supervisor multiplexes nonblocking stdin/stdout/stderr under a common
+deadline, including EOF after the leader exits. It creates no I/O worker threads.
+It terminates/reaps process groups before cleanup; compiler PID namespaces add
+containment for descendants that create their own sessions inside the sandbox.
+A detached pipe holder outside those namespaces can no longer prolong a call or
+produce a late success response. The Unix implementation uses the already-locked
+libc package directly for fcntl/kill, with documented descriptor/PID ownership.
 Compiler and runtime cleanup failures propagate explicitly and cannot admit a
 successful capability memory entry. `destroyed` reports on-disk artifact cleanup,
 not secure erasure from RAM, swap, backups or storage media. A failed cleanup
@@ -42,18 +51,25 @@ do not create an executable reuse pool or sweep unrelated `/tmp` entries.
 ## Validation
 
 Default workspace tests cover output flooding, blocked stdin/process descendants,
-exclusive file creation, truthful cleanup failure reports and request-limit
-propagation. The namespace integration test requires external tools and enabled
-user namespaces, so it is explicitly ignored in the default suite. Run it in a
-prepared Linux environment:
+a detached pipe holder retaining output after leader exit, exclusive file
+creation, cleanup failure reporting and request-limit propagation. Three external
+integration tests are explicitly ignored by default: native namespace canaries,
+an unprivileged permission-denied cleanup fixture, and actual WASI runtime cases.
+Run them in a prepared Linux environment:
 
 ```
-cargo test --locked -p sbh-forge process_boundary::tests::sandbox_is_empty_and_does_not_inherit_host_markers -- --ignored --exact
+cargo test --locked -p sbh-forge --lib -- --ignored --nocapture
 ```
 
-This integration check compiles ordinary native-target metadata and rejects only
-synthetic environment/file canaries. It does not install a WASI target, prove an
-end-to-end Wasmtime run, or replace adversarial runtime tests. Before release,
-exercise a supported WASI target and Wasmtime build, including timeout, memory
-and malformed-module tests. Existing callers matching outcome enums must handle
-the new `CleanupFailed` variants. No wire-data migration is required.
+When validating with a separate Rust toolchain copy, Cargo may prepend its own
+host toolchain to PATH. Build with `--no-run`, then execute the emitted test binary
+directly with the isolated rustc/wasmtime directory first in PATH. The WASI suite
+covers a normal run, compile-time and guest host-file/environment canaries,
+infinite-loop timeout, memory over-allocation, output flooding, malformed modules
+and absence of a persistent module cache. Tests use synthetic data only.
+
+The suite passed locally with Rust 1.99.1 / wasm32-wasip1 and Wasmtime 50.0.3.
+Revalidate the selected runtime/toolchain on the target deployment platform;
+these local checks are not independent approval or staging validation. Existing
+callers matching outcome enums must handle `CleanupFailed`. No wire-data
+migration is required.
