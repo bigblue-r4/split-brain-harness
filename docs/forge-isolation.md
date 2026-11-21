@@ -31,8 +31,16 @@ are supplied. Unknown CLI flags fail closed; operators must validate the selecte
 Wasmtime version before deployment. See the [official Wasmtime CLI option
 reference](https://docs.wasmtime.dev/cli-options.html) and [Wasm options](https://docs.wasmtime.dev/api/wasmtime_cli_flags/struct.WasmOptions.html).
 
+The Wasmtime host process also runs under bwrap with all namespaces unshared,
+capabilities dropped and environment cleared. Only its executable, system libraries
+and a read-only artifact workspace are mounted; runtime symlinks are canonicalized
+before mounting, and failed resolution aborts execution. Scratch HOME/cache lives in private
+tmpfs. No toolchain or writable host directory is mounted. Missing or failing bwrap
+fails execution, with no direct-runtime fallback. This uses the service context
+without ProtectKernelTunables described below.
+
 Runtime explicitly disables compiled-module caching and parallel compilation,
-and confines HOME/XDG_CACHE_HOME to the disposable workdir. This avoids default
+and confines HOME/XDG_CACHE_HOME to private tmpfs. This avoids default
 user-cache writes and bounds compilation concurrency.
 
 The supervisor multiplexes nonblocking stdin/stdout/stderr under a common
@@ -125,3 +133,14 @@ architectures fail closed. This permits installed loader dependencies and the
 read-only Rust toolchain without exposing unrelated paths such as
 `/usr/lib/os-release`. The multiarch directory remains a trusted system-library
 view, not a per-file library allowlist; operators must not store secrets there.
+
+## Runtime deadline allowance
+
+Wasmtime still receives the requested guest execution timeout. Its outer subprocess
+deadline is that timeout plus a fixed 1,000 ms allowance for startup and module
+compilation (maximum 11 seconds for the 10-second guest limit). The allowance is
+bounded, not a guarantee that every module can compile within it. Input delivery,
+output collection and process exit share this deadline; output and memory caps
+remain unchanged. The process CPU limit includes the same allowance, rounded up
+to seconds plus one second for teardown. A timed-out process group is killed and
+reaped before returning.
