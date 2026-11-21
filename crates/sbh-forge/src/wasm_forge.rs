@@ -260,6 +260,13 @@ fn compile_isolated(source: &str, workspace: &Workspace) -> CompileOutcome {
 // Real executor: bounded wasmtime CLI subprocess (no preopens / inherited env)
 // ---------------------------------------------------------------------------
 
+// Fixed startup/compilation allowance; guest execution still has runtime_ms.
+// The whole-call I/O deadline and CPU limit remain finite even before guest entry.
+const RUNTIME_STARTUP_SLACK_MS: u64 = 1_000;
+fn runtime_deadline(runtime_ms: u64) -> Duration {
+    Duration::from_millis(runtime_ms.saturating_add(RUNTIME_STARTUP_SLACK_MS))
+}
+
 pub struct WasmtimeCli;
 impl WasmExecutor for WasmtimeCli {
     fn execute(&self, wasm_bytes: &[u8], input: &str) -> ExecuteOutcome {
@@ -323,8 +330,11 @@ fn execute_isolated(
         None => return ExecuteOutcome::RuntimeNotFound,
     };
     // The runtime executable itself runs inside the same namespace boundary as rustc.
-    let mut command = match process_boundary::runtime_command(&runtime, &workspace.path, runtime_ms)
-    {
+    let mut command = match process_boundary::runtime_command(
+        &runtime,
+        &workspace.path,
+        runtime_ms + RUNTIME_STARTUP_SLACK_MS,
+    ) {
         Ok(command) => command,
         Err(e) => {
             return ExecuteOutcome::RuntimeError {
@@ -355,7 +365,7 @@ fn execute_isolated(
     match process_boundary::run(
         &mut command,
         input.as_bytes(),
-        Duration::from_millis(runtime_ms),
+        runtime_deadline(runtime_ms),
         MAX_OUTPUT,
     ) {
         Err(e) => ExecuteOutcome::RuntimeError {
@@ -942,6 +952,29 @@ mod tests {
         );
         let malformed = WasmtimeCli.execute_limited(b"not wasm", "", 2000, 64);
         assert!(matches!(malformed, ExecuteOutcome::ExecutionFailed { .. }));
+    }
+
+    #[test]
+    fn runtime_startup_slack_is_bounded() {
+        let deadline = runtime_deadline(200);
+        assert_eq!(deadline, Duration::from_millis(1_200));
+        let mut near_limit = Command::new("/bin/sh");
+        // Emulate startup followed by useful execution beyond the guest budget.
+        near_limit.args(["-c", "sleep 0.15; sleep 0.10; printf ok"]);
+        let output = process_boundary::run(&mut near_limit, b"", deadline, 1024).unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"ok");
+        let mut hung = Command::new("/bin/sh");
+        hung.args(["-c", "sleep 20"]);
+        let start = Instant::now();
+        let error = process_boundary::run(&mut hung, b"", deadline, 1024).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::TimedOut);
+        // Scheduling/kill/reap tolerance is test-only, not extra production slack.
+        assert!(start.elapsed() < deadline + Duration::from_millis(500));
+        assert_eq!(
+            runtime_deadline(WASM_EXEC_TIMEOUT_MS),
+            Duration::from_secs(11)
+        );
     }
 
     // --- Acceptance path ---
