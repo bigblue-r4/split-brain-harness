@@ -110,10 +110,16 @@ fn sandbox_command(address_space: u64, cpu_seconds: u64) -> io::Result<Command> 
 
 /// Isolate the Wasmtime host too; no toolchain, host home or writable host mounts.
 pub(crate) fn runtime_command(runtime: &Path, work: &Path, runtime_ms: u64) -> io::Result<Command> {
+    // Resolve trusted operator symlinks before the namespace hides their targets.
+    // An unavailable runtime must fail before constructing an executable boundary.
+    let runtime = runtime.canonicalize()?;
+    if !runtime.is_file() {
+        return Err(io::Error::other("runtime executable is not a file"));
+    }
     let mut command = sandbox_command(16 * 1024 * 1024 * 1024, runtime_ms.div_ceil(1000) + 1)?;
     command
         .arg("--ro-bind")
-        .arg(runtime)
+        .arg(&runtime)
         .arg("/runtime/wasmtime")
         .arg("--ro-bind")
         .arg(work)
@@ -336,12 +342,7 @@ mod tests {
     use super::*;
     #[test]
     fn runtime_command_requires_namespace_boundary() {
-        let cmd = runtime_command(
-            Path::new("/trusted/wasmtime"),
-            Path::new("/private/work"),
-            200,
-        )
-        .unwrap();
+        let cmd = runtime_command(Path::new("/bin/sh"), Path::new("/private/work"), 200).unwrap();
         let args: Vec<_> = cmd.get_args().map(|s| s.to_str().unwrap()).collect();
         assert_eq!(cmd.get_program(), "/usr/bin/prlimit");
         for flag in [
@@ -361,15 +362,37 @@ mod tests {
     }
 
     #[test]
+    fn runtime_path_resolution_is_required_before_mounting() {
+        let work = Workspace::new().unwrap();
+        let target = Path::new("/bin/sh").canonicalize().unwrap();
+        let link = work.path.join("operator-runtime-link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let cmd = runtime_command(&link, &work.path, 200).unwrap();
+        let args: Vec<_> = cmd.get_args().collect();
+        assert!(args.windows(3).any(|w| w[0] == "--ro-bind"
+            && w[1] == target.as_os_str()
+            && w[2] == "/runtime/wasmtime"));
+        fs::remove_file(&link).unwrap();
+        assert!(runtime_command(&link, &work.path, 200).is_err());
+        assert!(runtime_command(&work.path, &work.path, 200).is_err());
+    }
+
+    #[test]
     #[ignore = "requires enabled operator bwrap sandbox; run explicitly"]
     fn runtime_host_is_isolated_and_mount_failure_never_runs_it() {
         let work = Workspace::new().unwrap();
         let marker = Workspace::new().unwrap();
         marker.write("canary", b"synthetic").unwrap();
         work.write("tool.wasm", b"synthetic").unwrap();
-        // A stand-in runtime directly probes the host boundary, outside WASI.
+        // Use an operator-style symlink whose host target is hidden in the namespace.
         let shell = Path::new("/bin/sh").canonicalize().unwrap();
-        let mut cmd = runtime_command(&shell, &work.path, 2000).unwrap();
+        let link = marker.path.join("runtime-link");
+        std::os::unix::fs::symlink(&shell, &link).unwrap();
+        let mut cmd = runtime_command(&link, &work.path, 2000).unwrap();
+        let args: Vec<_> = cmd.get_args().collect();
+        assert!(args.windows(3).any(|w| w[0] == "--ro-bind"
+            && w[1] == shell.as_os_str()
+            && w[2] == "/runtime/wasmtime"));
         cmd.env("SGAIL_RUNTIME_HOST_CANARY", "synthetic").args(["-c", &format!(
             "test -z \"$SGAIL_RUNTIME_HOST_CANARY\" && test ! -e {} && test ! -e /etc/hostname && test -r /work/tool.wasm && ! (printf x > /work/created) && printf isolated",
             marker.path.join("canary").display())]);
@@ -381,8 +404,8 @@ mod tests {
         );
         assert_eq!(result.stdout, b"isolated");
         assert!(!work.path.join("created").exists());
-        let mut broken =
-            runtime_command(Path::new("/nonexistent/sbh-runtime"), &work.path, 2000).unwrap();
+        assert!(runtime_command(Path::new("/nonexistent/sbh-runtime"), &work.path, 2000).is_err());
+        let mut broken = runtime_command(&link, Path::new("/nonexistent/sbh-work"), 2000).unwrap();
         broken.args(["-c", "printf unrestricted"]);
         let result = run(&mut broken, b"", Duration::from_secs(2), 8192).unwrap();
         assert!(!result.status.success());

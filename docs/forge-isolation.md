@@ -33,7 +33,8 @@ reference](https://docs.wasmtime.dev/cli-options.html) and [Wasm options](https:
 
 The Wasmtime host process also runs under bwrap with all namespaces unshared,
 capabilities dropped and environment cleared. Only its executable, system libraries
-and a read-only artifact workspace are mounted; scratch HOME/cache lives in private
+and a read-only artifact workspace are mounted; runtime symlinks are canonicalized
+before mounting, and failed resolution aborts execution. Scratch HOME/cache lives in private
 tmpfs. No toolchain or writable host directory is mounted. Missing or failing bwrap
 fails execution, with no direct-runtime fallback. This uses the service context
 without ProtectKernelTunables described below.
