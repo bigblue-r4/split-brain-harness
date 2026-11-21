@@ -322,15 +322,17 @@ fn execute_isolated(
         Some(p) => p,
         None => return ExecuteOutcome::RuntimeNotFound,
     };
-    // Wasmtime reserves a large virtual address range for guarded linear memory.
-    // Keep the host limit finite but leave room for that reservation.
-    let mut command =
-        process_boundary::limited_command(16 * 1024 * 1024 * 1024, runtime_ms.div_ceil(1000) + 1);
+    // The runtime executable itself runs inside the same namespace boundary as rustc.
+    let mut command = match process_boundary::runtime_command(&runtime, &workspace.path, runtime_ms)
+    {
+        Ok(command) => command,
+        Err(e) => {
+            return ExecuteOutcome::RuntimeError {
+                error: format!("runtime isolation unavailable: {e}"),
+            }
+        }
+    };
     command
-        .arg(runtime)
-        .env("HOME", &workspace.path)
-        .env("XDG_CACHE_HOME", workspace.path.join("cache"))
-        .current_dir(&workspace.path)
         .args([
             "-C",
             "cache=n",
@@ -348,7 +350,7 @@ fn execute_isolated(
             "max-table-elements=10000",
             "--",
         ])
-        .arg(workspace.path.join("tool.wasm"));
+        .arg("/work/tool.wasm");
     let start = Instant::now();
     match process_boundary::run(
         &mut command,
