@@ -114,3 +114,14 @@ Revalidate the selected runtime/toolchain on the target deployment platform;
 these local checks are not independent approval or staging validation. Existing
 callers matching outcome enums must handle `CleanupFailed`. No wire-data
 migration is required.
+
+## Runtime deadline allowance
+
+Wasmtime still receives the requested guest execution timeout. Its outer subprocess
+deadline is that timeout plus a fixed 1,000 ms allowance for startup and module
+compilation (maximum 11 seconds for the 10-second guest limit). The allowance is
+bounded, not a guarantee that every module can compile within it. Input delivery,
+output collection and process exit share this deadline; output and memory caps
+remain unchanged. The process CPU limit includes the same allowance, rounded up
+to seconds plus one second for teardown. A timed-out process group is killed and
+reaped before returning.
