@@ -48,6 +48,47 @@ not secure erasure from RAM, swap, backups or storage media. A failed cleanup
 report requires operator inspection of the named `sbh-forge-*` scratch directory;
 do not create an executable reuse pool or sweep unrelated `/tmp` entries.
 
+## Running the forge under systemd
+
+The forge's own sandbox is built with bubblewrap. If the process that calls
+the forge is itself confined by systemd, **do not set
+`ProtectKernelTunables=yes`** for it. That setting mounts parts of `/proc`
+read-only over the host's `/proc`. The kernel then refuses the fresh `/proc`
+that bubblewrap mounts inside the new PID namespace, so every compile fails
+with:
+
+```
+bwrap: Can't mount proc on /newroot/proc: Operation not permitted
+```
+
+The forge reports this as a failed compilation; it never falls back to an
+unsandboxed compile. Leaving the setting off loses little: generated code runs
+inside bubblewrap with no capabilities, in its own user, PID and network
+namespaces, with a fresh `/proc`, so it cannot write `/proc/sys` either way.
+
+Tested on Ubuntu 26.04.1 (bubblewrap 0.11.1 under the distribution's
+`bwrap-userns-restrict` AppArmor profile,
+`kernel.apparmor_restrict_unprivileged_userns=1` unchanged). Run as a
+dedicated service user through `systemd-run`, each of these settings, alone and
+together, let the forge compile and run: `NoNewPrivileges=yes`,
+`ProtectSystem=strict`, `ProtectHome=yes`, `PrivateTmp=yes`,
+`PrivateDevices=yes`, `ProtectKernelModules=yes`, `ProtectControlGroups=yes`,
+`RestrictSUIDSGID=yes`, `LockPersonality=yes`. `ProtectKernelTunables=yes`
+alone failed as above. If you add other settings, check bubblewrap still
+starts with a quick test as the service user, for example:
+
+```
+sudo systemd-run --quiet --wait --pipe --collect -p User=<service-user> <your -p settings> \
+  /usr/bin/bwrap --unshare-all --die-with-parent --ro-bind / / --dev /dev --proc /proc true
+```
+
+On Ubuntu 24.04 and later, `kernel.apparmor_restrict_unprivileged_userns=1`
+denies unprivileged user namespaces to programs that no AppArmor profile allows
+them. Ubuntu 26.04 ships a profile for `/usr/bin/bwrap`, so nothing has to be
+added there. A host without such a profile fails closed (for example `bwrap:
+loopback: Failed RTM_NEWADDR: Operation not permitted`). Do not turn the sysctl
+off globally to fix this.
+
 ## Validation
 
 Default workspace tests cover output flooding, blocked stdin/process descendants,
