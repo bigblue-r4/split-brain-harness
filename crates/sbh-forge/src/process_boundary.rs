@@ -53,6 +53,34 @@ impl Drop for Workspace {
     }
 }
 
+/// Supported distro library layout; never mount the whole /usr/lib or /lib tree.
+/// Both executable loaders and their multiarch dependencies must be present.
+fn bind_system_libraries(command: &mut Command) -> io::Result<()> {
+    let (multiarch, loader) = match std::env::consts::ARCH {
+        "x86_64" => ("x86_64-linux-gnu", "/lib64/ld-linux-x86-64.so.2"),
+        "aarch64" => ("aarch64-linux-gnu", "/lib/ld-linux-aarch64.so.1"),
+        _ => return Err(io::Error::other("unsupported forge system-library layout")),
+    };
+    let source = PathBuf::from("/usr/lib").join(multiarch).canonicalize()?;
+    if !source.is_dir() {
+        return Err(io::Error::other("missing multiarch library directory"));
+    }
+    let destination = PathBuf::from("/usr/lib").join(multiarch);
+    let loader_source = Path::new(loader).canonicalize()?;
+    if !loader_source.is_file() {
+        return Err(io::Error::other("missing dynamic loader"));
+    }
+    command
+        .arg("--ro-bind")
+        .arg(source)
+        .arg(destination)
+        .args(["--symlink", "usr/lib", "/lib"])
+        .arg("--ro-bind")
+        .arg(loader_source)
+        .arg(loader);
+    Ok(())
+}
+
 /// Read-only compiler toolchain, disposable workdir and otherwise empty root.
 /// Bubblewrap/prlimit must be installed by the operator; absence fails closed.
 pub(crate) fn compiler_command(sysroot: &Path, work: &Path) -> io::Result<Command> {
@@ -99,12 +127,7 @@ fn sandbox_command(address_space: u64, cpu_seconds: u64) -> io::Result<Command> 
         "--tmpfs",
         "/tmp",
     ]);
-    // Dynamic loader and system libraries only, not /usr, /etc or user homes.
-    for path in ["/usr/lib", "/lib", "/lib64"] {
-        if Path::new(path).exists() {
-            command.args(["--ro-bind", path, path]);
-        }
-    }
+    bind_system_libraries(&mut command)?;
     Ok(command)
 }
 
@@ -394,7 +417,7 @@ mod tests {
             && w[1] == shell.as_os_str()
             && w[2] == "/runtime/wasmtime"));
         cmd.env("SGAIL_RUNTIME_HOST_CANARY", "synthetic").args(["-c", &format!(
-            "test -z \"$SGAIL_RUNTIME_HOST_CANARY\" && test ! -e {} && test ! -e /etc/hostname && test -r /work/tool.wasm && ! (printf x > /work/created) && printf isolated",
+            "test -z \"$SGAIL_RUNTIME_HOST_CANARY\" && test ! -e {} && test ! -e /etc/hostname && test ! -e /usr/lib/os-release && test -r /work/tool.wasm && ! (printf x > /work/created) && printf isolated",
             marker.path.join("canary").display())]);
         let result = run(&mut cmd, b"", Duration::from_secs(2), 8192).unwrap();
         assert!(
@@ -410,6 +433,18 @@ mod tests {
         let result = run(&mut broken, b"", Duration::from_secs(2), 8192).unwrap();
         assert!(!result.status.success());
         assert!(result.stdout.is_empty());
+    }
+
+    #[test]
+    fn compiler_library_mounts_exclude_broad_host_trees() {
+        let cmd =
+            compiler_command(Path::new("/trusted/toolchain"), Path::new("/private/work")).unwrap();
+        let args: Vec<_> = cmd.get_args().map(|a| a.to_str().unwrap()).collect();
+        for mount in args.windows(3).filter(|w| w[0] == "--ro-bind") {
+            assert!(!["/usr/lib", "/lib", "/lib64"].contains(&mount[1]));
+            assert!(!["/usr/lib", "/lib", "/lib64"].contains(&mount[2]));
+        }
+        assert!(args.iter().any(|a| a.contains("linux-gnu")));
     }
 
     #[test]
@@ -516,6 +551,30 @@ mod tests {
             baseline.status.success(),
             "sandbox baseline failed (no unrestricted fallback): {}",
             String::from_utf8_lossy(&baseline.stderr)
+        );
+        assert!(
+            Path::new("/usr/lib/os-release").is_file(),
+            "host fixture must exist"
+        );
+        fs::write(
+            dir.path.join("tool.rs"),
+            b"pub const X: &str = include_str!(\"/usr/lib/os-release\");",
+        )
+        .unwrap();
+        let mut excluded = compiler_command(&root, &dir.path).unwrap();
+        excluded.args([
+            "--crate-type=lib",
+            "--emit=metadata",
+            "/work/tool.rs",
+            "-o",
+            "/work/hidden.rmeta",
+        ]);
+        let result = run(&mut excluded, b"", Duration::from_secs(15), 8192).unwrap();
+        let error = String::from_utf8_lossy(&result.stderr);
+        assert!(!result.status.success());
+        assert!(
+            error.contains("couldn't read") && error.contains("/usr/lib/os-release"),
+            "{error}"
         );
         for source in [
             "pub const X: &str = env!(\"SGAIL_COMPILER_CANARY\");".to_string(),

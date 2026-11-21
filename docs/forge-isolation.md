@@ -123,6 +123,17 @@ these local checks are not independent approval or staging validation. Existing
 callers matching outcome enums must handle `CleanupFailed`. No wire-data
 migration is required.
 
+## System-library view
+
+On supported Debian/Ubuntu x86_64 and aarch64 layouts the sandbox mounts only
+`/usr/lib/<multiarch-triplet>` read-only, plus the architecture's dynamic loader
+file. `/lib` is a sandbox-local symlink to `usr/lib`; the host `/usr/lib`, `/lib`
+and `/lib64` trees are never mounted wholesale. Missing layout/loader or unsupported
+architectures fail closed. This permits installed loader dependencies and the
+read-only Rust toolchain without exposing unrelated paths such as
+`/usr/lib/os-release`. The multiarch directory remains a trusted system-library
+view, not a per-file library allowlist; operators must not store secrets there.
+
 ## Runtime deadline allowance
 
 Wasmtime still receives the requested guest execution timeout. Its outer subprocess
