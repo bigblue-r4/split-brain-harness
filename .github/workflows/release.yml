@@ -14,14 +14,16 @@ permissions:
 jobs:
   check:
     name: Check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable branch; the toolchain input below pins the exact release
         with:
+          toolchain: 1.100.0
           components: rustfmt, clippy
+          targets: wasm32-wasip1
       - run: cargo fmt --check
       - run: cargo build
       - run: cargo test
@@ -38,7 +40,7 @@ jobs:
   create-release:
     name: Create GitHub Release
     needs: check
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
     permissions:
       contents: write
     steps:

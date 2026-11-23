@@ -1,0 +1,8 @@
+# Exact Rust release for builds and CI (H08 C05: no floating "stable").
+# Update deliberately: change the version here AND in .github/workflows/*.yml.
+# wasm32-wasip1 is the forge's compile target (crates/sbh-forge/src/wasm_forge.rs).
+[toolchain]
+channel = "1.100.0"
+components = ["rustfmt", "clippy"]
+targets = ["wasm32-wasip1"]
+profile = "minimal"
