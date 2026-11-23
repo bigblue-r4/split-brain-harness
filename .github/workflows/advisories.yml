@@ -1,0 +1,36 @@
+name: Advisories
+
+# H08 C03: dependency advisory check, separate from CI so it can run on a schedule and
+# is not a required merge check unless branch protection is changed to make it one.
+on:
+  push:
+    branches: [master]
+    paths: ["Cargo.lock", "Cargo.toml", "**/Cargo.toml", ".github/workflows/advisories.yml"]
+  pull_request:
+    paths: ["Cargo.lock", "Cargo.toml", "**/Cargo.toml", ".github/workflows/advisories.yml"]
+  schedule:
+    - cron: "23 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-audit:
+    name: cargo audit
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable branch; toolchain below pins the exact release (keep in step with rust-toolchain.toml)
+        with:
+          toolchain: 1.100.0
+      # Exact version, built from crates.io with its own lockfile (--locked).
+      - name: Install cargo-audit 0.23.0
+        run: cargo install cargo-audit --version 0.23.0 --locked
+      # Fails on vulnerability advisories. Unmaintained, unsound and yanked notices are
+      # printed as warnings and do not fail the job. To accept a specific advisory, add
+      # `--ignore RUSTSEC-YYYY-NNNN` here with a comment saying why.
+      - name: cargo audit
+        run: cargo audit
