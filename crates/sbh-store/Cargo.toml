@@ -14,7 +14,7 @@ path = "src/lib.rs"
 serde      = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sbh-core   = { path = "../sbh-core", version = "0.1.0" }
-rusqlite   = { version = "=0.32.1", features = ["bundled"] }
+rusqlite   = { version = "=0.41.0", features = ["bundled", "fallible_uint"] }
 
 [dev-dependencies]
 tempfile = "3"
