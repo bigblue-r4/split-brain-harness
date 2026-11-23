@@ -970,6 +970,29 @@ mod tests {
     }
 
     #[test]
+    fn database_written_by_rusqlite_0_32_1_remains_readable() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("legacy.sqlite");
+        std::fs::write(
+            &path,
+            include_bytes!("../testdata/dream-memory-rusqlite-0.32.1.sqlite"),
+        )
+        .unwrap();
+        let store = MemoryStore::open(&path, Box::new(Verifier)).unwrap();
+        let history = store.history(&id("m")).unwrap();
+        assert_eq!(history.source, source("source-task", "source-run"));
+        assert_eq!(history.revisions.len(), 2);
+        assert_eq!(history.revisions[0].content.text, "original");
+        assert_eq!(
+            history.revisions[1].operator_id.as_deref(),
+            Some("operator")
+        );
+        let selected = select(&store, "m", "other", "run", "other input");
+        assert_eq!(selected.eligible.len(), 1);
+        assert_eq!(selected.eligible[0].content().text, "original");
+    }
+
+    #[test]
     fn temp_database_reopens_and_competing_connections_recheck_revision() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("memory.sqlite");
